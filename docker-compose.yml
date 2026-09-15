@@ -1,0 +1,97 @@
+# Maintenance Monitor — local/production-like stack.
+#
+#   cp .env.example .env        # then fill in secrets
+#   docker compose up -d --build
+#   docker compose --profile seed run --rm seed      # create the initial ADMIN
+#   docker compose --profile mail up -d mailpit      # optional SMTP catcher (UI :8025)
+#
+# Secrets come from .env; required values fail fast with a clear message.
+
+name: maintenance-monitor
+
+x-api-environment: &api-environment
+  DATABASE_URL: postgres://${POSTGRES_USER:?POSTGRES_USER is required}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/${POSTGRES_DB:-maintenance_monitor}
+
+x-hardening: &hardening
+  read_only: true
+  tmpfs:
+    - /tmp
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-maintenance_monitor}
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER is required}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    # Not published to the host by default; uncomment for local inspection.
+    # ports:
+    #   - '5432:5432'
+
+  # migrate and seed reuse the image built for `api` (a single build avoids tag conflicts).
+  migrate:
+    image: maintenance-monitor-api:latest
+    pull_policy: never
+    command: ['node', 'dist/database/scripts/migrate.js', 'run']
+    env_file: .env
+    environment:
+      <<: *api-environment
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: 'no'
+    <<: *hardening
+
+  api:
+    build: .
+    image: maintenance-monitor-api:latest
+    env_file: .env
+    environment:
+      <<: *api-environment
+      PORT: 3000
+    ports:
+      - '${API_PORT:-3000}:3000'
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    stop_grace_period: 20s
+    <<: *hardening
+
+  seed:
+    image: maintenance-monitor-api:latest
+    pull_policy: never
+    profiles: ['seed']
+    command: ['node', 'dist/database/scripts/seed.js']
+    env_file: .env
+    environment:
+      <<: *api-environment
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: 'no'
+    <<: *hardening
+
+  mailpit:
+    image: axllent/mailpit:latest
+    profiles: ['mail']
+    restart: unless-stopped
+    ports:
+      - '8025:8025'
+
+volumes:
+  pgdata:
