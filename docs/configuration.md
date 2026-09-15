@@ -82,12 +82,12 @@ Gmail's SMTP server works with the existing SMTP transport; no code changes are 
 3. Configure:
 
    ```dotenv
-   MAIL_HOST=smtp.gmail.com
-   MAIL_PORT=465
+   MAIL_HOST=
+   MAIL_PORT=
    MAIL_SECURE=true
    MAIL_USERNAME=maintenance.monitor@gmail.com
    # The 16-character App Password, without spaces
-   MAIL_PASSWORD=abcdefghijklmnop
+   MAIL_PASSWORD=
    MAIL_FROM=maintenance.monitor@gmail.com
    MAIL_FROM_NAME=Maintenance Monitor
    ```
