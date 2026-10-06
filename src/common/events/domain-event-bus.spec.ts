@@ -10,8 +10,9 @@ const event: MachineStatusUpdatedEvent = {
   previousStatus: MachineState.ACTIVE,
   newStatus: MachineState.DOWNTIME,
   updatedBy: { id: 2, name: 'Tech' },
+  reason: 'Machine is downtime',
+  trigger: { type: 'MACHINE_LOG', logId: 3 },
   logId: 3,
-  source: 'MACHINE_LOG_CREATED',
   timestamp: '2026-09-01T00:00:00.000Z',
 };
 

@@ -1,8 +1,13 @@
 import request from 'supertest';
+import { LogScope } from '../../src/common/enums/log-scope.enum';
+import { type MachineOperationalStatus } from '../../src/common/enums/machine-operational-status.enum';
 import { MachineState } from '../../src/common/enums/machine-state.enum';
+import { OperationalImpact } from '../../src/common/enums/operational-impact.enum';
 import { Role } from '../../src/common/enums/role.enum';
 import { MachineLog } from '../../src/machine-logs/machine-log.entity';
+import { MachinePart } from '../../src/machine-parts/machine-part.entity';
 import { Machine } from '../../src/machines/machine.entity';
+import { MaintenanceSchedule } from '../../src/maintenance/maintenance-schedule.entity';
 import { User } from '../../src/users/user.entity';
 import { type TestContext } from './test-app';
 
@@ -96,6 +101,8 @@ export async function createMachine(
       name: overrides.name ?? `Machine ${n}`,
       serialNumber: overrides.serialNumber ?? `SN-${n}-${Date.now()}`,
       status: overrides.status ?? MachineState.ACTIVE,
+      // A machine without parts: its system status is its status.
+      systemStatus: overrides.status ?? MachineState.ACTIVE,
       isActive: overrides.isActive ?? true,
     }),
   );
@@ -108,9 +115,16 @@ export async function machineStatus(ctx: TestContext, machineId: number): Promis
   return machine.status;
 }
 
+export async function machineSystemStatus(ctx: TestContext, machineId: number): Promise<MachineState> {
+  const machine = await ctx.container.dataSource
+    .getRepository(Machine)
+    .findOneOrFail({ where: { id: machineId }, withDeleted: true });
+  return machine.systemStatus;
+}
+
 /**
- * Asserts the central invariant: a machine's status equals the resulting state
- * of its most recent (non-deleted) log. Returns the latest log, if any.
+ * Asserts the central invariant: a machine's system status equals the resulting
+ * state of its most recent (non-deleted) whole-machine log. Returns that log, if any.
  */
 export async function expectStatusMatchesLatestLog(
   ctx: TestContext,
@@ -118,7 +132,76 @@ export async function expectStatusMatchesLatestLog(
 ): Promise<MachineLog | null> {
   const latest = await ctx.container.dataSource
     .getRepository(MachineLog)
-    .findOne({ where: { machineId }, order: { id: 'DESC' } });
-  if (latest) expect(await machineStatus(ctx, machineId)).toBe(latest.resultingState);
+    .findOne({ where: { machineId, scope: LogScope.MACHINE }, order: { id: 'DESC' } });
+  if (latest) expect(await machineSystemStatus(ctx, machineId)).toBe(latest.resultingState);
   return latest;
+}
+
+export interface CreatePartOptions {
+  readonly partCode?: string;
+  readonly name?: string;
+  readonly isCritical?: boolean;
+  readonly status?: MachineState;
+  readonly operationalImpact?: OperationalImpact;
+  readonly isActive?: boolean;
+}
+
+/** Inserts a part directly, bypassing the API (used to arrange status scenarios). */
+export async function createPart(
+  ctx: TestContext,
+  machineId: number,
+  options: CreatePartOptions = {},
+): Promise<MachinePart> {
+  const n = next();
+  const repository = ctx.container.dataSource.getRepository(MachinePart);
+  const status = options.status ?? MachineState.ACTIVE;
+  return repository.save(
+    repository.create({
+      machineId,
+      partCode: options.partCode ?? `P${n}`,
+      name: options.name ?? `Part ${n}`,
+      isCritical: options.isCritical ?? false,
+      status,
+      operationalImpact:
+        status === MachineState.ACTIVE
+          ? OperationalImpact.NON_BLOCKING
+          : (options.operationalImpact ?? OperationalImpact.NON_BLOCKING),
+      isActive: options.isActive ?? true,
+    }),
+  );
+}
+
+export async function machineOperationalStatus(
+  ctx: TestContext,
+  machineId: number,
+): Promise<MachineOperationalStatus> {
+  const machine = await ctx.container.dataSource
+    .getRepository(Machine)
+    .findOneOrFail({ where: { id: machineId }, withDeleted: true });
+  return machine.operationalStatus;
+}
+
+/** Inserts a maintenance schedule directly, so dates can be placed in the past. */
+export async function createSchedule(
+  ctx: TestContext,
+  machineId: number,
+  options: {
+    intervalDays: number;
+    nextMaintenanceAt: Date;
+    lastMaintenanceAt?: Date | null;
+    reminderDaysBefore?: number;
+    isActive?: boolean;
+  },
+): Promise<MaintenanceSchedule> {
+  const repository = ctx.container.dataSource.getRepository(MaintenanceSchedule);
+  return repository.save(
+    repository.create({
+      machineId,
+      intervalDays: options.intervalDays,
+      nextMaintenanceAt: options.nextMaintenanceAt,
+      lastMaintenanceAt: options.lastMaintenanceAt ?? null,
+      reminderDaysBefore: options.reminderDaysBefore ?? 3,
+      isActive: options.isActive ?? true,
+    }),
+  );
 }

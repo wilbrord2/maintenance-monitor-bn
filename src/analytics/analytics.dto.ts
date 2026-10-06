@@ -49,6 +49,24 @@ const logCountsSchema = z.object({
   closed: z.number().int(),
 });
 
+const partCountsSchema = z.object({
+  total: z.number().int(),
+  active: z.number().int(),
+  underMaintenance: z.number().int(),
+  downtime: z.number().int(),
+  underTest: z.number().int(),
+  blocking: z.number().int(),
+  critical: z.number().int(),
+});
+
+const scheduleCountsSchema = z.object({
+  total: z.number().int(),
+  active: z.number().int(),
+  upcoming: z.number().int(),
+  due: z.number().int(),
+  overdue: z.number().int(),
+});
+
 export const overviewResponseSchema = z
   .object({
     range: rangeSchema,
@@ -60,10 +78,67 @@ export const overviewResponseSchema = z
       underTest: z.number().int(),
       inactive: z.number().int(),
     }),
+    machineOperational: z.object({
+      operating: z.number().int(),
+      operatingWithDefects: z.number().int(),
+      notOperating: z.number().int(),
+    }),
+    parts: partCountsSchema,
+    maintenance: scheduleCountsSchema,
     logs: logCountsSchema.extend({ currentlyOpen: z.number().int() }),
     totalDowntimeHours: z.number(),
   })
   .meta({ id: 'AnalyticsOverview' });
+
+export const partsAnalyticsResponseSchema = z
+  .object({
+    range: rangeSchema,
+    byStatus: partCountsSchema,
+    impact: z.object({
+      machinesWithPartIssues: z.number().int(),
+      machinesStoppedByParts: z.number().int(),
+    }),
+    totalPartDowntimeHours: z.number(),
+    mostProblematic: z.array(
+      z.object({
+        machine: machineRefSchema,
+        part: z.object({
+          id: z.number().int(),
+          partCode: z.string(),
+          name: z.string(),
+          isCritical: z.boolean(),
+        }),
+        events: z.number().int(),
+        downtimeHours: z.number(),
+        lastEventAt: z.iso.datetime().nullable(),
+      }),
+    ),
+  })
+  .meta({ id: 'AnalyticsParts' });
+
+export const maintenanceAnalyticsResponseSchema = z
+  .object({
+    range: rangeSchema,
+    schedules: scheduleCountsSchema,
+    compliance: z.object({
+      completed: z.number().int(),
+      missed: z.number().int(),
+      cancelled: z.number().int(),
+      inProgress: z.number().int(),
+      scheduled: z.number().int(),
+      completedOnTime: z.number().int(),
+      onTimeRate: z.number().nullable(),
+    }),
+    byMachine: z.array(
+      z.object({
+        machine: machineRefSchema,
+        completed: z.number().int(),
+        missed: z.number().int(),
+        lastCompletedAt: z.iso.datetime().nullable(),
+      }),
+    ),
+  })
+  .meta({ id: 'AnalyticsMaintenance' });
 
 export const downtimeResponseSchema = z
   .object({

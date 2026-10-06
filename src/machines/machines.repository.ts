@@ -1,5 +1,6 @@
 import { type DataSource, type EntityManager } from 'typeorm';
 import { LogStatus } from '../common/enums/log-status.enum';
+import { type MachineOperationalStatus } from '../common/enums/machine-operational-status.enum';
 import { type MachineState } from '../common/enums/machine-state.enum';
 import {
   buildPage,
@@ -16,6 +17,7 @@ export type MachineSortField = (typeof MACHINE_SORT_FIELDS)[number];
 
 export interface MachineFilters {
   readonly status?: MachineState;
+  readonly operationalStatus?: MachineOperationalStatus;
   readonly isActive?: boolean;
   readonly search?: string;
 }
@@ -71,14 +73,31 @@ export class MachinesRepository {
   }
 
   /**
-   * The only write path for machine status. Must be called inside the
-   * transaction that holds the machine lock and records the causing log.
+   * The only write path for the machine's system status. Must be called inside
+   * the transaction that holds the machine lock and records the causing log.
    */
-  async updateStatus(id: number, status: MachineState, manager: EntityManager): Promise<void> {
+  async updateSystemStatus(id: number, systemStatus: MachineState, manager: EntityManager): Promise<void> {
     await this.repo(manager)
       .createQueryBuilder()
       .update(Machine)
-      .set({ status })
+      .set({ systemStatus })
+      .where('id = :id', { id })
+      .execute();
+  }
+
+  /**
+   * The only write path for the derived status and operational status. Called
+   * by MachineStatusSynchronizer inside the machine-locked transaction.
+   */
+  async updateDerivedStatus(
+    id: number,
+    derived: { status: MachineState; operationalStatus: MachineOperationalStatus },
+    manager: EntityManager,
+  ): Promise<void> {
+    await this.repo(manager)
+      .createQueryBuilder()
+      .update(Machine)
+      .set({ status: derived.status, operationalStatus: derived.operationalStatus })
       .where('id = :id', { id })
       .execute();
   }
@@ -99,6 +118,11 @@ export class MachinesRepository {
   ): Promise<Page<Machine>> {
     const query = this.repo().createQueryBuilder('machine');
     if (filters.status) query.andWhere('machine.status = :status', { status: filters.status });
+    if (filters.operationalStatus) {
+      query.andWhere('machine.operationalStatus = :operationalStatus', {
+        operationalStatus: filters.operationalStatus,
+      });
+    }
     if (filters.isActive !== undefined)
       query.andWhere('machine.isActive = :isActive', { isActive: filters.isActive });
     if (filters.search) {

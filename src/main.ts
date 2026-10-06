@@ -22,6 +22,7 @@ async function bootstrap(): Promise<void> {
 
   await new Promise<void>((resolve) => server.listen(config.port, resolve));
   container.tokenCleanup.start();
+  container.maintenanceScheduler.start();
   logger.info(
     { port: config.port, env: config.env, version: container.version },
     'Maintenance Monitor API started',

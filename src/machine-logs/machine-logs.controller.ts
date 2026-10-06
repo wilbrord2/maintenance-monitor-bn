@@ -15,6 +15,10 @@ interface IdParams {
   readonly id: number;
 }
 
+interface PartIdParams {
+  readonly partId: number;
+}
+
 export class MachineLogsController {
   constructor(
     private readonly logs: MachineLogsService,
@@ -60,6 +64,14 @@ export class MachineLogsController {
   }: AuthenticatedRequestInput<IdParams, MachineHistoryQuery>): Promise<HttpResult> {
     const page = mapPage(await this.logs.history(params.id, query), toMachineLogResponse);
     return ok('Machine history retrieved', page.items, page.meta);
+  }
+
+  async partHistory({
+    params,
+    query,
+  }: AuthenticatedRequestInput<PartIdParams, MachineHistoryQuery>): Promise<HttpResult> {
+    const page = mapPage(await this.logs.partHistory(params.partId, query), toMachineLogResponse);
+    return ok('Machine part history retrieved', page.items, page.meta);
   }
 
   stateTransitions(): Promise<HttpResult> {

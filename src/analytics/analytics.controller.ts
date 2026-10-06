@@ -24,6 +24,14 @@ export class AnalyticsController {
     return ok('Technician activity analytics', await this.analytics.technicians(query));
   }
 
+  async parts({ query }: AuthenticatedRequestInput<undefined, AnalyticsTopQuery>): Promise<HttpResult> {
+    return ok('Part analytics', await this.analytics.parts(query));
+  }
+
+  async maintenance({ query }: AuthenticatedRequestInput<undefined, AnalyticsTopQuery>): Promise<HttpResult> {
+    return ok('Maintenance analytics', await this.analytics.maintenance(query));
+  }
+
   async faults({ query }: AuthenticatedRequestInput<undefined, AnalyticsFaultsQuery>): Promise<HttpResult> {
     return ok('Fault analytics', await this.analytics.faults(query));
   }

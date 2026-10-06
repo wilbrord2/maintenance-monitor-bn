@@ -4,6 +4,7 @@ import { AuditLog } from '../../src/audit/audit-log.entity';
 import { type AuditAction } from '../../src/audit/audit.constants';
 import { type AuditEntry, AuditService } from '../../src/audit/audit.service';
 import { LogStatus } from '../../src/common/enums/log-status.enum';
+import { MachineOperationalStatus } from '../../src/common/enums/machine-operational-status.enum';
 import { MachineState } from '../../src/common/enums/machine-state.enum';
 import { MACHINE_STATUS_UPDATED } from '../../src/common/events/domain-events';
 import { MachineLog } from '../../src/machine-logs/machine-log.entity';
@@ -56,7 +57,7 @@ describe('Critical: machine log + machine status are atomic and concurrency-safe
     request(ctx.app).post('/api/v1/machine-logs').set(session.auth).send(body);
 
   describe('transactional atomicity', () => {
-    it.each(['MACHINE_LOG_CREATED', 'MACHINE_STATUS_CHANGED'] as const)(
+    it.each(['MACHINE_LOG_CREATED', 'MACHINE_SYSTEM_STATUS_CHANGED', 'MACHINE_STATUS_CHANGED'] as const)(
       'rolls back the log AND the status change when the transaction fails at %s',
       async (failOn) => {
         const machine = await createMachine(ctx);
@@ -128,6 +129,10 @@ describe('Critical: machine log + machine status are atomic and concurrency-safe
         faultDescription: 'direct insert',
         entryStatus: MachineState.ACTIVE,
         resultingState: MachineState.ACTIVE,
+        machineStatusBefore: MachineState.ACTIVE,
+        machineStatusAfter: MachineState.ACTIVE,
+        operationalStatusBefore: MachineOperationalStatus.OPERATING,
+        operationalStatusAfter: MachineOperationalStatus.OPERATING,
       };
       await expect(repository.insert({ ...base, downtimeHours: -1 })).rejects.toThrow(
         /CHK_machine_logs_downtime_non_negative/,

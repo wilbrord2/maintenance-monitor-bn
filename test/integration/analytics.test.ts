@@ -1,5 +1,6 @@
 import request from 'supertest';
 import { LogStatus } from '../../src/common/enums/log-status.enum';
+import { MachineOperationalStatus } from '../../src/common/enums/machine-operational-status.enum';
 import { MachineState } from '../../src/common/enums/machine-state.enum';
 import { MachineLog } from '../../src/machine-logs/machine-log.entity';
 import { createMachine, createUser, technicianSession, type Session } from '../helpers/factories';
@@ -53,6 +54,10 @@ describe('Analytics', () => {
           userId: tech.user.id,
           entryStatus: MachineState.ACTIVE,
           resultingState: MachineState.ACTIVE,
+          machineStatusBefore: MachineState.ACTIVE,
+          machineStatusAfter: MachineState.ACTIVE,
+          operationalStatusBefore: MachineOperationalStatus.OPERATING,
+          operationalStatusAfter: MachineOperationalStatus.OPERATING,
           logStatus: LogStatus.CLOSED,
           faultDescription: 'Generic fault',
           downtimeHours: 0,

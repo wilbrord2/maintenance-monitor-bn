@@ -1,6 +1,8 @@
 import { type Clock } from '../common/utils/clock';
 import {
   type AnalyticsRepository,
+  type MaintenanceByMachineRow,
+  type ProblematicPartRow,
   type FaultRow,
   type LogStatusCounts,
   type MachineDowntimeRow,
@@ -20,7 +22,12 @@ export interface RangeSummary {
 
 export interface AnalyticsOverview {
   readonly range: RangeSummary;
+  /** Machine workflow statuses (machine logs). */
   readonly machines: MachineStatusCounts;
+  /** Derived operational statuses (parts + workflow). */
+  readonly machineOperational: Awaited<ReturnType<AnalyticsRepository['machineOperationalCounts']>>;
+  readonly parts: Awaited<ReturnType<AnalyticsRepository['partStatusCounts']>>;
+  readonly maintenance: Awaited<ReturnType<AnalyticsRepository['maintenanceScheduleCounts']>>;
   readonly logs: LogStatusCounts & { readonly currentlyOpen: number };
   readonly totalDowntimeHours: number;
 }
@@ -50,13 +57,80 @@ export class AnalyticsService {
 
   async overview(query: TimeRangeQuery): Promise<AnalyticsOverview> {
     const range = this.range(query);
-    const [machines, logs, currentlyOpen, totalDowntimeHours] = await Promise.all([
-      this.repository.machineStatusCounts(),
-      this.repository.logStatusCounts(range),
-      this.repository.openLogsCount(),
-      this.repository.totalDowntimeHours(range),
+    const [machines, machineOperational, parts, maintenance, logs, currentlyOpen, totalDowntimeHours] =
+      await Promise.all([
+        this.repository.machineStatusCounts(),
+        this.repository.machineOperationalCounts(),
+        this.repository.partStatusCounts(),
+        this.repository.maintenanceScheduleCounts(this.clock.now()),
+        this.repository.logStatusCounts(range),
+        this.repository.openLogsCount(),
+        this.repository.totalDowntimeHours(range),
+      ]);
+    return {
+      range: toSummary(range),
+      machines,
+      machineOperational,
+      parts,
+      maintenance,
+      logs: { ...logs, currentlyOpen },
+      totalDowntimeHours,
+    };
+  }
+
+  /** Part conditions, their impact on the fleet and the most problematic parts. */
+  async parts(query: TimeRangeQuery & { limit: number }) {
+    const range = this.range(query);
+    const [byStatus, impact, mostProblematic, totalPartDowntimeHours] = await Promise.all([
+      this.repository.partStatusCounts(),
+      this.repository.partIssueImpact(),
+      this.repository.problematicParts(range, query.limit),
+      this.repository.partDowntimeHours(range),
     ]);
-    return { range: toSummary(range), machines, logs: { ...logs, currentlyOpen }, totalDowntimeHours };
+    return {
+      range: toSummary(range),
+      byStatus,
+      impact,
+      totalPartDowntimeHours,
+      mostProblematic: mostProblematic.map((row: ProblematicPartRow) => ({
+        machine: machineRef(row),
+        part: {
+          id: row.partId,
+          partCode: row.partCode,
+          name: row.partName,
+          isCritical: row.isCritical,
+        },
+        events: row.events,
+        downtimeHours: row.downtimeHours,
+        lastEventAt: row.lastEventAt ? new Date(row.lastEventAt).toISOString() : null,
+      })),
+    };
+  }
+
+  /** Recurring-maintenance compliance: schedules by state, outcomes and per-machine history. */
+  async maintenance(query: TimeRangeQuery & { limit: number }) {
+    const range = this.range(query);
+    const [schedules, compliance, byMachine] = await Promise.all([
+      this.repository.maintenanceScheduleCounts(this.clock.now()),
+      this.repository.maintenanceCompliance(range),
+      this.repository.maintenanceByMachine(range, query.limit),
+    ]);
+    const finished = compliance.completed + compliance.missed;
+    return {
+      range: toSummary(range),
+      schedules,
+      compliance: {
+        ...compliance,
+        /** Share of finished maintenances completed on or before the scheduled day. */
+        onTimeRate: finished === 0 ? null : Math.round((compliance.completedOnTime / finished) * 100) / 100,
+      },
+      byMachine: byMachine.map((row: MaintenanceByMachineRow) => ({
+        machine: machineRef(row),
+        completed: row.completed,
+        missed: row.missed,
+        lastCompletedAt: row.lastCompletedAt ? new Date(row.lastCompletedAt).toISOString() : null,
+      })),
+    };
   }
 
   async downtime(query: TimeRangeQuery & { limit: number }) {

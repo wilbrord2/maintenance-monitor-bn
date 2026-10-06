@@ -1,7 +1,8 @@
 import { type HttpResult, created, ok } from '../common/http/response';
 import { type AuthenticatedRequestInput } from '../common/http/route';
-import { toMachineResponse } from './machine.mapper';
+import { toMachineDetailResponse, toMachineResponse } from './machine.mapper';
 import { type CreateMachineDto, type ListMachinesQuery, type UpdateMachineDto } from './machines.dto';
+import { type Clock } from '../common/utils/clock';
 import { type MachinesService } from './machines.service';
 
 interface IdParams {
@@ -9,7 +10,10 @@ interface IdParams {
 }
 
 export class MachinesController {
-  constructor(private readonly machines: MachinesService) {}
+  constructor(
+    private readonly machines: MachinesService,
+    private readonly clock: Clock,
+  ) {}
 
   async create({
     body,
@@ -24,14 +28,16 @@ export class MachinesController {
     const page = await this.machines.list(query);
     return ok(
       'Machines retrieved',
-      page.items.map(({ machine, activity }) => toMachineResponse(machine, activity)),
+      page.items.map(({ machine, activity, partSummary }) =>
+        toMachineResponse(machine, activity, partSummary),
+      ),
       page.meta,
     );
   }
 
   async getById({ params }: AuthenticatedRequestInput<IdParams>): Promise<HttpResult> {
-    const { machine, activity } = await this.machines.getById(params.id);
-    return ok('Machine retrieved', toMachineResponse(machine, activity));
+    const detail = await this.machines.getById(params.id);
+    return ok('Machine retrieved', toMachineDetailResponse({ ...detail, now: this.clock.now() }));
   }
 
   async update({

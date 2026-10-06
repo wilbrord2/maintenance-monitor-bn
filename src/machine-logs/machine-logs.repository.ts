@@ -1,6 +1,8 @@
 import { type DataSource, type EntityManager, type SelectQueryBuilder } from 'typeorm';
-import { type LogStatus } from '../common/enums/log-status.enum';
+import { LogScope } from '../common/enums/log-scope.enum';
+import { LogStatus } from '../common/enums/log-status.enum';
 import { type MachineState } from '../common/enums/machine-state.enum';
+import { type OperationalImpact } from '../common/enums/operational-impact.enum';
 import {
   buildPage,
   escapeLikePattern,
@@ -15,6 +17,9 @@ export type MachineLogSortField = (typeof MACHINE_LOG_SORT_FIELDS)[number];
 
 export interface MachineLogFilters {
   readonly machineId?: number;
+  readonly scope?: LogScope;
+  readonly machinePartId?: number;
+  readonly operationalImpact?: OperationalImpact;
   readonly userId?: number;
   readonly entryStatus?: MachineState;
   readonly resultingState?: MachineState;
@@ -33,12 +38,13 @@ export class MachineLogsRepository {
     return (manager ?? this.dataSource.manager).getRepository(MachineLog);
   }
 
-  /** Logs with their machine and author, which stay visible even when soft-deleted. */
+  /** Logs with their machine, part and author, which stay visible even when soft-deleted. */
   private withRelations(manager?: EntityManager): SelectQueryBuilder<MachineLog> {
     return this.repo(manager)
       .createQueryBuilder('log')
       .withDeleted()
       .innerJoinAndSelect('log.machine', 'machine')
+      .leftJoinAndSelect('log.machinePart', 'part')
       .innerJoinAndSelect('log.user', 'user')
       .where('log.deletedAt IS NULL');
   }
@@ -65,17 +71,33 @@ export class MachineLogsRepository {
   }
 
   /**
-   * Id of the machine's most recent non-deleted log. Ids are assigned while the
-   * machine row is locked, so they are strictly ordered per machine (unlike
-   * created_at, which records transaction start time).
+   * Id of the machine's most recent non-deleted whole-machine log, which defines
+   * its system status. Ids are assigned while the machine row is locked, so they
+   * are strictly ordered per machine (unlike created_at, which records
+   * transaction start time).
    */
-  async findLatestIdForMachine(machineId: number, manager: EntityManager): Promise<number | null> {
+  async findLatestIdForMachineSystem(machineId: number, manager: EntityManager): Promise<number | null> {
     const row = await this.repo(manager)
       .createQueryBuilder('log')
       .select('MAX(log.id)', 'latestId')
       .where('log.machineId = :machineId', { machineId })
+      .andWhere('log.scope = :scope', { scope: LogScope.MACHINE })
       .getRawOne<{ latestId: number | null }>();
     return row?.latestId ?? null;
+  }
+
+  /** Id of the part's most recent non-deleted log, which defines its condition. */
+  async findLatestIdForPart(machinePartId: number, manager: EntityManager): Promise<number | null> {
+    const row = await this.repo(manager)
+      .createQueryBuilder('log')
+      .select('MAX(log.id)', 'latestId')
+      .where('log.machinePartId = :machinePartId', { machinePartId })
+      .getRawOne<{ latestId: number | null }>();
+    return row?.latestId ?? null;
+  }
+
+  countOpenForPart(machinePartId: number, manager: EntityManager): Promise<number> {
+    return this.repo(manager).count({ where: { machinePartId, logStatus: LogStatus.OPEN } });
   }
 
   async findPage(
@@ -86,6 +108,15 @@ export class MachineLogsRepository {
     const query = this.withRelations();
     if (filters.machineId !== undefined)
       query.andWhere('log.machineId = :machineId', { machineId: filters.machineId });
+    if (filters.scope) query.andWhere('log.scope = :scope', { scope: filters.scope });
+    if (filters.machinePartId !== undefined) {
+      query.andWhere('log.machinePartId = :machinePartId', { machinePartId: filters.machinePartId });
+    }
+    if (filters.operationalImpact) {
+      query.andWhere('log.operationalImpact = :operationalImpact', {
+        operationalImpact: filters.operationalImpact,
+      });
+    }
     if (filters.userId !== undefined) query.andWhere('log.userId = :userId', { userId: filters.userId });
     if (filters.entryStatus)
       query.andWhere('log.entryStatus = :entryStatus', { entryStatus: filters.entryStatus });
