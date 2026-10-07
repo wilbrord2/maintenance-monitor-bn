@@ -1,6 +1,10 @@
 import { type MachineOperationalStatus } from '../common/enums/machine-operational-status.enum';
 import { type MachineState } from '../common/enums/machine-state.enum';
-import { toMachinePartResponse, type MachinePartResponse } from '../machine-parts/machine-part.mapper';
+import {
+  toMachinePartResponse,
+  toPartMaintenanceSummary,
+  type MachinePartResponse,
+} from '../machine-parts/machine-part.mapper';
 import { type MachinePart } from '../machine-parts/machine-part.entity';
 import { EMPTY_PART_SUMMARY, type MachinePartSummary } from '../machine-parts/machine-parts.repository';
 import {
@@ -89,12 +93,13 @@ export function toMachineAuditSnapshot(machine: Machine): Record<string, unknown
 
 /**
  * Machine details: the machine (including its resolved operational status), the
- * individual part conditions it was derived from, and the maintenance plan.
+ * individual part conditions it was derived from, and its maintenance tasks
+ * (machine-wide and per part).
  * Clients display `operationalStatus`; they never recompute it.
  */
 export interface MachineDetailResponse extends MachineResponse {
   readonly partDetails: readonly MachinePartResponse[];
-  readonly maintenance: MaintenanceScheduleResponse | null;
+  readonly maintenanceSchedules: readonly MaintenanceScheduleResponse[];
 }
 
 export function toMachineDetailResponse(input: {
@@ -102,17 +107,28 @@ export function toMachineDetailResponse(input: {
   activity?: MachineActivitySummary;
   partSummary?: MachinePartSummary;
   parts: readonly MachinePart[];
-  schedule: MaintenanceSchedule | null;
+  schedules: readonly MaintenanceSchedule[];
   now: Date;
 }): MachineDetailResponse {
+  // Schedules arrive ordered by due date, so the first active one per part is the next.
+  const nextByPart = new Map<number, MaintenanceSchedule>();
+  for (const schedule of input.schedules) {
+    if (schedule.isActive && schedule.machinePartId !== null && !nextByPart.has(schedule.machinePartId)) {
+      nextByPart.set(schedule.machinePartId, schedule);
+    }
+  }
   return {
     ...toMachineResponse(
       input.machine,
       input.activity ?? EMPTY_ACTIVITY,
       input.partSummary ?? EMPTY_PART_SUMMARY,
     ),
-    partDetails: input.parts.map(toMachinePartResponse),
-    maintenance: input.schedule ? toMaintenanceScheduleResponse(input.schedule, input.now) : null,
+    partDetails: input.parts.map((part) =>
+      toMachinePartResponse(part, toPartMaintenanceSummary(nextByPart.get(part.id), input.now)),
+    ),
+    maintenanceSchedules: input.schedules.map((schedule) =>
+      toMaintenanceScheduleResponse(schedule, input.now),
+    ),
   };
 }
 

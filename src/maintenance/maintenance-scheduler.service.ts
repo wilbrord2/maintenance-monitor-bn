@@ -7,6 +7,7 @@ import { SYSTEM_REQUEST_META } from '../common/http/request-meta';
 import { type AppLogger } from '../common/logger/logger';
 import { type Clock } from '../common/utils/clock';
 import { type MailService } from '../notifications/mail/mail.service';
+import { type MaintenanceDigestItem } from '../notifications/mail/templates/maintenance.templates';
 import { type UsersRepository } from '../users/users.repository';
 import { type MaintenanceSchedule } from './maintenance-schedule.entity';
 import { type MaintenanceRepository } from './maintenance.repository';
@@ -25,6 +26,11 @@ export interface ReminderRunResult {
 /**
  * Sends preventive-maintenance reminders (UPCOMING, DUE, OVERDUE) to every
  * active user and marks events from past cycles as MISSED.
+ *
+ * Each schedule (a part task or a machine-wide task) gets its own realtime
+ * event, but the emails of one run are batched into a single digest per
+ * recipient: with daily and weekly part inspections, one email per task would
+ * flood inboxes.
  *
  * Idempotent: a reminder is recorded per schedule, kind and maintenance cycle
  * under a unique constraint, so repeated runs — or several API replicas running
@@ -51,6 +57,7 @@ export class MaintenanceSchedulerService {
     const recipients = await this.users.findNotificationRecipients();
     let remindersSent = 0;
     let eventsMissed = 0;
+    const digest: MaintenanceDigestItem[] = [];
 
     for (const schedule of schedules) {
       const status = resolveScheduleStatus(schedule, now);
@@ -70,6 +77,9 @@ export class MaintenanceSchedulerService {
         machineId: schedule.machineId,
         machineName: schedule.machine?.name ?? '',
         serialNumber: schedule.machine?.serialNumber ?? '',
+        machinePartId: schedule.machinePartId,
+        partName: schedule.machinePart?.name ?? null,
+        taskName: schedule.taskName,
         state: status.state,
         nextMaintenanceAt: schedule.nextMaintenanceAt.toISOString(),
         daysUntilDue: status.daysUntilDue,
@@ -83,6 +93,8 @@ export class MaintenanceSchedulerService {
         actorId: null,
         newValues: {
           kind: status.reminderKind,
+          machinePartId: schedule.machinePartId,
+          taskName: schedule.taskName,
           state: status.state,
           daysUntilDue: status.daysUntilDue,
           cycleDueOn: cycleKey(schedule.nextMaintenanceAt),
@@ -91,12 +103,23 @@ export class MaintenanceSchedulerService {
         meta: SYSTEM_REQUEST_META,
       });
 
-      await this.notify(schedule, status.state, status.daysUntilDue, recipients);
+      digest.push({
+        machineName: schedule.machine?.name ?? `Machine ${schedule.machineId}`,
+        serialNumber: schedule.machine?.serialNumber ?? '',
+        partName: schedule.machinePart?.name ?? null,
+        taskName: schedule.taskName,
+        state: status.state,
+        dueOn: cycleKey(schedule.nextMaintenanceAt),
+        daysUntilDue: status.daysUntilDue,
+        intervalDays: schedule.intervalDays,
+      });
 
       if (status.state === MaintenanceScheduleState.OVERDUE) {
         eventsMissed += await this.markPastCycleEventsMissed(schedule, now);
       }
     }
+
+    if (digest.length > 0) await this.notify(digest, recipients);
 
     if (remindersSent > 0 || eventsMissed > 0) {
       this.logger.info(
@@ -144,26 +167,14 @@ export class MaintenanceSchedulerService {
 
   /** Reminder emails are best effort: a mail failure must not stop the job. */
   private async notify(
-    schedule: MaintenanceSchedule,
-    state: MaintenanceScheduleState,
-    daysUntilDue: number,
+    items: readonly MaintenanceDigestItem[],
     recipients: readonly { email: string; fullName: string }[],
   ): Promise<void> {
-    const dueOn = cycleKey(schedule.nextMaintenanceAt);
     for (const recipient of recipients) {
       try {
-        await this.mail.sendMaintenanceReminder({
-          to: recipient.email,
-          fullName: recipient.fullName,
-          machineName: schedule.machine?.name ?? `Machine ${schedule.machineId}`,
-          serialNumber: schedule.machine?.serialNumber ?? '',
-          state,
-          dueOn,
-          daysUntilDue,
-          intervalDays: schedule.intervalDays,
-        });
+        await this.mail.sendMaintenanceDigest({ to: recipient.email, fullName: recipient.fullName, items });
       } catch (error: unknown) {
-        this.logger.warn({ err: error, scheduleId: schedule.id }, 'Maintenance reminder email failed');
+        this.logger.warn({ err: error, reminders: items.length }, 'Maintenance digest email failed');
       }
     }
   }

@@ -1,4 +1,11 @@
-import { type DataSource, type EntityManager, In, LessThanOrEqual } from 'typeorm';
+import {
+  type DataSource,
+  type EntityManager,
+  In,
+  IsNull,
+  LessThanOrEqual,
+  type SelectQueryBuilder,
+} from 'typeorm';
 import { MaintenanceEventStatus, type MaintenanceReminderKind } from '../common/enums/maintenance.enums';
 import { buildPage, toOffset, type Page, type PageRequest } from '../common/pagination/pagination';
 import { MaintenanceEvent } from './maintenance-event.entity';
@@ -13,8 +20,19 @@ export const MAINTENANCE_EVENT_SORT_FIELDS = [
 ] as const;
 export type MaintenanceEventSortField = (typeof MAINTENANCE_EVENT_SORT_FIELDS)[number];
 
+/** `machine`: machine-wide tasks only; `part`: part inspections only. */
+export type MaintenanceScheduleScope = 'machine' | 'part';
+
+export interface MaintenanceScheduleFilters {
+  readonly machineId?: number;
+  readonly machinePartId?: number;
+  readonly scope?: MaintenanceScheduleScope;
+  readonly isActive?: boolean;
+}
+
 export interface MaintenanceEventFilters {
   readonly machineId?: number;
+  readonly machinePartId?: number;
   readonly maintenanceScheduleId?: number;
   readonly status?: MaintenanceEventStatus;
   readonly performedById?: number;
@@ -50,8 +68,76 @@ export class MaintenanceRepository {
     return this.schedules(manager).save(schedule);
   }
 
-  findScheduleByMachine(machineId: number, manager?: EntityManager): Promise<MaintenanceSchedule | null> {
-    return this.schedules(manager).findOne({ where: { machineId } });
+  findScheduleById(id: number, manager?: EntityManager): Promise<MaintenanceSchedule | null> {
+    return this.schedules(manager).findOne({
+      where: { id },
+      relations: { machine: true, machinePart: true },
+      withDeleted: true,
+    });
+  }
+
+  /** A machine's schedules: machine-wide tasks first, then part tasks, by due date. */
+  findSchedulesByMachine(
+    machineId: number,
+    filters: Omit<MaintenanceScheduleFilters, 'machineId'> = {},
+    manager?: EntityManager,
+  ): Promise<MaintenanceSchedule[]> {
+    const query = this.schedules(manager)
+      .createQueryBuilder('schedule')
+      .leftJoinAndSelect('schedule.machinePart', 'machinePart')
+      .where('schedule.machineId = :machineId', { machineId });
+    this.applyScheduleFilters(query, filters);
+    return query
+      .orderBy('schedule.machinePartId', 'ASC', 'NULLS FIRST')
+      .addOrderBy('schedule.nextMaintenanceAt', 'ASC')
+      .addOrderBy('schedule.id', 'ASC')
+      .getMany();
+  }
+
+  /** The earliest-due active schedule of each part, keyed by part id. */
+  async findNextSchedulesForParts(partIds: readonly number[]): Promise<Map<number, MaintenanceSchedule>> {
+    const result = new Map<number, MaintenanceSchedule>();
+    if (partIds.length === 0) return result;
+    const schedules = await this.schedules()
+      .createQueryBuilder('schedule')
+      .distinctOn(['schedule.machinePartId'])
+      .where('schedule.machinePartId IN (:...partIds)', { partIds })
+      .andWhere('schedule.isActive = true')
+      .orderBy('schedule.machinePartId', 'ASC')
+      .addOrderBy('schedule.nextMaintenanceAt', 'ASC')
+      .addOrderBy('schedule.id', 'ASC')
+      .getMany();
+    for (const schedule of schedules) {
+      if (schedule.machinePartId !== null) result.set(schedule.machinePartId, schedule);
+    }
+    return result;
+  }
+
+  findScheduleByTask(
+    target: { machineId: number; machinePartId: number | null; taskName: string },
+    manager?: EntityManager,
+  ): Promise<MaintenanceSchedule | null> {
+    return this.schedules(manager).findOne({
+      where: {
+        ...(target.machinePartId === null
+          ? { machineId: target.machineId, machinePartId: IsNull() }
+          : { machinePartId: target.machinePartId }),
+        taskName: target.taskName,
+      },
+    });
+  }
+
+  /** Stops reminders for a part that was removed or deactivated. Returns the ids affected. */
+  async deactivateSchedulesForPart(machinePartId: number, manager?: EntityManager): Promise<number[]> {
+    const result = await this.schedules(manager)
+      .createQueryBuilder()
+      .update(MaintenanceSchedule)
+      .set({ isActive: false })
+      .where('machine_part_id = :machinePartId', { machinePartId })
+      .andWhere('is_active = true')
+      .returning('"id"')
+      .execute();
+    return (result.raw as { id: number }[]).map((row) => row.id);
   }
 
   /** Locks the schedule row; used when rolling the cycle forward. */
@@ -67,21 +153,20 @@ export class MaintenanceRepository {
   findActiveSchedulesDueBefore(until: Date): Promise<MaintenanceSchedule[]> {
     return this.schedules().find({
       where: { isActive: true, nextMaintenanceAt: LessThanOrEqual(until) },
-      relations: { machine: true },
+      relations: { machine: true, machinePart: true },
       order: { nextMaintenanceAt: 'ASC' },
     });
   }
 
   async findSchedulesPage(
-    filters: { state?: 'due' | 'overdue' | 'upcoming'; now: Date; isActive?: boolean },
+    filters: MaintenanceScheduleFilters & { state?: 'due' | 'overdue' | 'upcoming'; now: Date },
     page: PageRequest,
   ): Promise<Page<MaintenanceSchedule>> {
     const query = this.schedules()
       .createQueryBuilder('schedule')
-      .innerJoinAndSelect('schedule.machine', 'machine');
-    if (filters.isActive !== undefined) {
-      query.andWhere('schedule.isActive = :isActive', { isActive: filters.isActive });
-    }
+      .innerJoinAndSelect('schedule.machine', 'machine')
+      .leftJoinAndSelect('schedule.machinePart', 'machinePart');
+    this.applyScheduleFilters(query, filters);
     // Calendar-day comparisons in UTC keep "due today" aligned with the derived state.
     if (filters.state === 'overdue') {
       query.andWhere(`date_trunc('day', schedule.nextMaintenanceAt) < date_trunc('day', :now::timestamptz)`);
@@ -104,6 +189,23 @@ export class MaintenanceRepository {
     return buildPage(items, total, page);
   }
 
+  private applyScheduleFilters(
+    query: SelectQueryBuilder<MaintenanceSchedule>,
+    filters: MaintenanceScheduleFilters,
+  ): void {
+    if (filters.machineId !== undefined) {
+      query.andWhere('schedule.machineId = :machineId', { machineId: filters.machineId });
+    }
+    if (filters.machinePartId !== undefined) {
+      query.andWhere('schedule.machinePartId = :machinePartId', { machinePartId: filters.machinePartId });
+    }
+    if (filters.scope === 'machine') query.andWhere('schedule.machinePartId IS NULL');
+    if (filters.scope === 'part') query.andWhere('schedule.machinePartId IS NOT NULL');
+    if (filters.isActive !== undefined) {
+      query.andWhere('schedule.isActive = :isActive', { isActive: filters.isActive });
+    }
+  }
+
   // --------------------------------------------------------------------- events
 
   createEvent(values: Partial<MaintenanceEvent>): MaintenanceEvent {
@@ -119,6 +221,7 @@ export class MaintenanceRepository {
       .createQueryBuilder('event')
       .withDeleted()
       .leftJoinAndSelect('event.machine', 'machine')
+      .leftJoinAndSelect('event.machinePart', 'machinePart')
       .leftJoinAndSelect('event.performedBy', 'performedBy')
       .leftJoinAndSelect('event.maintenanceSchedule', 'schedule')
       .where('event.id = :id', { id })
@@ -153,9 +256,14 @@ export class MaintenanceRepository {
       .createQueryBuilder('event')
       .withDeleted()
       .leftJoinAndSelect('event.machine', 'machine')
-      .leftJoinAndSelect('event.performedBy', 'performedBy');
+      .leftJoinAndSelect('event.machinePart', 'machinePart')
+      .leftJoinAndSelect('event.performedBy', 'performedBy')
+      .leftJoinAndSelect('event.maintenanceSchedule', 'schedule');
     if (filters.machineId !== undefined) {
       query.andWhere('event.machineId = :machineId', { machineId: filters.machineId });
+    }
+    if (filters.machinePartId !== undefined) {
+      query.andWhere('event.machinePartId = :machinePartId', { machinePartId: filters.machinePartId });
     }
     if (filters.maintenanceScheduleId !== undefined) {
       query.andWhere('event.maintenanceScheduleId = :scheduleId', {

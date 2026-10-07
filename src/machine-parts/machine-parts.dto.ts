@@ -9,6 +9,7 @@ import {
   sortingQuery,
   text,
 } from '../common/validation/primitives';
+import { maintenanceScheduleStateSchema } from '../maintenance/maintenance.dto';
 import { MACHINE_PART_SORT_FIELDS } from './machine-parts.repository';
 
 /** Parts reuse the four machine statuses (ACTIVE, UNDER_MAINTENANCE, DOWNTIME, UNDER_TEST). */
@@ -86,6 +87,17 @@ export const machinePartResponseSchema = z
     isActive: z.boolean(),
     hasDefect: z.boolean(),
     isBlockingMachine: z.boolean(),
+    nextMaintenance: z
+      .object({
+        scheduleId: z.number().int(),
+        taskName: z.string(),
+        intervalDays: z.number().int(),
+        nextMaintenanceAt: z.iso.datetime(),
+        state: maintenanceScheduleStateSchema,
+        daysUntilDue: z.number().int(),
+      })
+      .nullable()
+      .meta({ description: "The part's earliest-due active maintenance task; null when none" }),
     createdAt: z.iso.datetime(),
     updatedAt: z.iso.datetime(),
   })

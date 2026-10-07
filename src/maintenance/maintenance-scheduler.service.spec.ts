@@ -16,6 +16,10 @@ const schedule = (overrides: Partial<MaintenanceSchedule> = {}): MaintenanceSche
   ({
     id: 1,
     machineId: 10,
+    machinePartId: null,
+    machinePart: null,
+    taskName: 'General maintenance',
+    description: null,
     intervalDays: 20,
     lastMaintenanceAt: inDays(-20),
     nextMaintenanceAt: NOW,
@@ -40,7 +44,7 @@ function setup(schedules: MaintenanceSchedule[], options: { recorded?: boolean }
     ]),
   } as unknown as jest.Mocked<UsersRepository>;
   const mail = {
-    sendMaintenanceReminder: jest.fn().mockResolvedValue(undefined),
+    sendMaintenanceDigest: jest.fn().mockResolvedValue(undefined),
   } as unknown as jest.Mocked<MailService>;
   const audit = { record: jest.fn() } as unknown as jest.Mocked<AuditService>;
   const events = { publish: jest.fn() } as unknown as jest.Mocked<DomainEventBus>;
@@ -80,15 +84,21 @@ describe('MaintenanceSchedulerService', () => {
       cycleDueOn: '2026-10-05',
       recipients: 2,
     });
-    expect(mail.sendMaintenanceReminder).toHaveBeenCalledTimes(2);
-    expect(mail.sendMaintenanceReminder).toHaveBeenCalledWith(
-      expect.objectContaining({
-        to: 'admin@example.test',
-        state: 'DUE',
-        dueOn: '2026-10-05',
-        daysUntilDue: 0,
-      }),
-    );
+    expect(mail.sendMaintenanceDigest).toHaveBeenCalledTimes(2);
+    expect(mail.sendMaintenanceDigest).toHaveBeenCalledWith({
+      to: 'admin@example.test',
+      fullName: 'Admin',
+      items: [
+        expect.objectContaining({
+          machineName: 'Press 1',
+          partName: null,
+          taskName: 'General maintenance',
+          state: 'DUE',
+          dueOn: '2026-10-05',
+          daysUntilDue: 0,
+        }),
+      ],
+    });
     expect(events.publish).toHaveBeenCalledWith(
       'maintenance.reminder',
       expect.objectContaining({ state: 'DUE' }),
@@ -98,19 +108,47 @@ describe('MaintenanceSchedulerService', () => {
     );
   });
 
+  it('sends one digest per recipient for all part and machine tasks of a run', async () => {
+    const { service, mail, events } = setup([
+      schedule(),
+      schedule({
+        id: 2,
+        machinePartId: 7,
+        machinePart: { id: 7, name: 'Cutting head', partCode: 'P01' } as MaintenanceSchedule['machinePart'],
+        taskName: 'Cutting head',
+        intervalDays: 7,
+        nextMaintenanceAt: inDays(-1),
+      }),
+    ]);
+    await expect(service.run()).resolves.toMatchObject({ remindersSent: 2 });
+
+    expect(events.publish).toHaveBeenCalledTimes(2);
+    expect(events.publish).toHaveBeenCalledWith(
+      'maintenance.reminder',
+      expect.objectContaining({
+        scheduleId: 2,
+        machinePartId: 7,
+        partName: 'Cutting head',
+        state: 'OVERDUE',
+      }),
+    );
+    expect(mail.sendMaintenanceDigest).toHaveBeenCalledTimes(2);
+    expect(mail.sendMaintenanceDigest.mock.calls[0]![0].items).toHaveLength(2);
+  });
+
   it('skips schedules outside their reminder window', async () => {
     const { service, repository, mail } = setup([
       schedule({ nextMaintenanceAt: inDays(10), reminderDaysBefore: 3 }),
     ]);
     await expect(service.run()).resolves.toMatchObject({ examined: 1, remindersSent: 0 });
     expect(repository.recordNotification).not.toHaveBeenCalled();
-    expect(mail.sendMaintenanceReminder).not.toHaveBeenCalled();
+    expect(mail.sendMaintenanceDigest).not.toHaveBeenCalled();
   });
 
   it('sends nothing when the reminder was already recorded for this cycle', async () => {
     const { service, mail, events } = setup([schedule()], { recorded: false });
     await expect(service.run()).resolves.toMatchObject({ remindersSent: 0 });
-    expect(mail.sendMaintenanceReminder).not.toHaveBeenCalled();
+    expect(mail.sendMaintenanceDigest).not.toHaveBeenCalled();
     expect(events.publish).not.toHaveBeenCalled();
   });
 
@@ -130,17 +168,19 @@ describe('MaintenanceSchedulerService', () => {
 
   it('keeps going when a reminder email fails', async () => {
     const { service, mail, logger } = setup([schedule()]);
-    mail.sendMaintenanceReminder.mockRejectedValueOnce(new Error('smtp down'));
+    mail.sendMaintenanceDigest.mockRejectedValueOnce(new Error('smtp down'));
     await expect(service.run()).resolves.toMatchObject({ remindersSent: 1 });
     expect(logger.warn).toHaveBeenCalled();
-    expect(mail.sendMaintenanceReminder).toHaveBeenCalledTimes(2);
+    expect(mail.sendMaintenanceDigest).toHaveBeenCalledTimes(2);
   });
 
   it('falls back to the machine id when the relation is missing', async () => {
     const { service, mail } = setup([schedule({ machine: undefined })]);
     await service.run();
-    expect(mail.sendMaintenanceReminder).toHaveBeenCalledWith(
-      expect.objectContaining({ machineName: 'Machine 10', serialNumber: '' }),
+    expect(mail.sendMaintenanceDigest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        items: [expect.objectContaining({ machineName: 'Machine 10', serialNumber: '' })],
+      }),
     );
   });
 

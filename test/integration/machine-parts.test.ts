@@ -115,9 +115,9 @@ describe('Machine parts and derived machine status', () => {
         status: 'ACTIVE',
         operationalStatus: 'OPERATING',
         parts: { total: 1, active: 1, critical: 1, blocking: 0 },
-        maintenance: null,
+        maintenanceSchedules: [],
       });
-      expect(detail.partDetails).toHaveLength(1);
+      expect(detail.partDetails).toMatchObject([{ nextMaintenance: null }]);
 
       const audit = await ctx.container.dataSource
         .getRepository(AuditLog)

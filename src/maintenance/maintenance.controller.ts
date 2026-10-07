@@ -8,6 +8,7 @@ import {
   type CreateMaintenanceEventDto,
   type CreateMaintenanceScheduleDto,
   type ListMaintenanceEventsQuery,
+  type ListMaintenanceSchedulesQuery,
   type MaintenanceDashboardQuery,
   type StartMaintenanceEventDto,
   type UpdateMaintenanceEventDto,
@@ -43,8 +44,20 @@ export class MaintenanceController {
     );
   }
 
-  async getSchedule({ params }: AuthenticatedRequestInput<MachineParams>): Promise<HttpResult> {
-    const schedule = await this.maintenance.getSchedule(params.machineId);
+  async listSchedules({
+    params,
+    query,
+  }: AuthenticatedRequestInput<MachineParams, ListMaintenanceSchedulesQuery>): Promise<HttpResult> {
+    const now = this.clock.now();
+    const schedules = await this.maintenance.listSchedules(params.machineId, query);
+    return ok(
+      'Maintenance schedules retrieved',
+      schedules.map((schedule) => toMaintenanceScheduleResponse(schedule, now)),
+    );
+  }
+
+  async getSchedule({ params }: AuthenticatedRequestInput<IdParams>): Promise<HttpResult> {
+    const schedule = await this.maintenance.getSchedule(params.id);
     return ok('Maintenance schedule retrieved', toMaintenanceScheduleResponse(schedule, this.clock.now()));
   }
 
@@ -53,8 +66,8 @@ export class MaintenanceController {
     body,
     user,
     meta,
-  }: AuthenticatedRequestInput<MachineParams, undefined, UpdateMaintenanceScheduleDto>): Promise<HttpResult> {
-    const schedule = await this.maintenance.updateSchedule(params.machineId, body, user, meta);
+  }: AuthenticatedRequestInput<IdParams, undefined, UpdateMaintenanceScheduleDto>): Promise<HttpResult> {
+    const schedule = await this.maintenance.updateSchedule(params.id, body, user, meta);
     return ok(
       'Maintenance schedule updated successfully',
       toMaintenanceScheduleResponse(schedule, this.clock.now()),

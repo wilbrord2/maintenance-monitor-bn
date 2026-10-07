@@ -16,6 +16,8 @@ import { type MachineLogsRepository } from '../machine-logs/machine-logs.reposit
 import { type Machine } from '../machines/machine.entity';
 import { type MachineStatusSynchronizer } from '../machines/machine-status.synchronizer';
 import { type MachinesRepository } from '../machines/machines.repository';
+import { type MaintenanceSchedule } from '../maintenance/maintenance-schedule.entity';
+import { type MaintenanceRepository } from '../maintenance/maintenance.repository';
 import { type MachinePart } from './machine-part.entity';
 import { toMachinePartAuditSnapshot } from './machine-part.mapper';
 import {
@@ -32,7 +34,8 @@ const PART_CODE_EXISTS_MESSAGE = 'A part with this code already exists on this m
  * machine logs (see MachineLogsService); every change here that can affect the
  * machine (adding, deactivating or deleting a part, changing criticality) asks
  * MachineStatusSynchronizer to re-derive the machine status in the same
- * transaction.
+ * transaction. Removing or deactivating a part also deactivates its
+ * maintenance schedules, so no reminders are sent for it.
  */
 export class MachinePartsService {
   constructor(
@@ -43,6 +46,7 @@ export class MachinePartsService {
     private readonly transactions: TransactionRunner,
     private readonly audit: AuditService,
     private readonly clock: Clock,
+    private readonly maintenance: MaintenanceRepository,
   ) {}
 
   // ---------------------------------------------------------------- parts (ADMIN)
@@ -118,6 +122,11 @@ export class MachinePartsService {
     );
   }
 
+  /** The earliest-due active maintenance schedule of each part, keyed by part id. */
+  nextMaintenanceFor(parts: readonly MachinePart[]): Promise<Map<number, MaintenanceSchedule>> {
+    return this.maintenance.findNextSchedulesForParts(parts.map((part) => part.id));
+  }
+
   async getPart(machineId: number, partId: number): Promise<MachinePart> {
     const part = await this.parts.findById(partId);
     if (part?.machineId !== machineId) {
@@ -171,6 +180,7 @@ export class MachinePartsService {
           },
           manager,
         );
+        if (!part.isActive) await this.deactivateSchedules(part.id, actor, meta, manager);
         return this.statusSync.synchronize({
           machine,
           trigger: { type: 'MACHINE_PART', partId: part.id },
@@ -217,6 +227,7 @@ export class MachinePartsService {
         },
         manager,
       );
+      await this.deactivateSchedules(part.id, actor, meta, manager);
       return this.statusSync.synchronize({
         machine,
         trigger: { type: 'MACHINE_PART', partId: part.id },
@@ -230,6 +241,29 @@ export class MachinePartsService {
   }
 
   // ------------------------------------------------------------------- internals
+
+  private async deactivateSchedules(
+    partId: number,
+    actor: AuthenticatedUser,
+    meta: RequestMeta,
+    manager: EntityManager,
+  ): Promise<void> {
+    const scheduleIds = await this.maintenance.deactivateSchedulesForPart(partId, manager);
+    for (const scheduleId of scheduleIds) {
+      await this.audit.record(
+        {
+          action: AuditAction.MAINTENANCE_SCHEDULE_UPDATED,
+          entity: AuditEntity.MAINTENANCE_SCHEDULE,
+          entityId: scheduleId,
+          actorId: actor.id,
+          oldValues: { isActive: true },
+          newValues: { isActive: false, machinePartId: partId },
+          meta,
+        },
+        manager,
+      );
+    }
+  }
 
   /** A part that is ACTIVE never blocks; otherwise the explicit impact wins, then criticality. */
   private resolveImpact(

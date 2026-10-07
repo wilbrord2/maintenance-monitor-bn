@@ -6,7 +6,7 @@ import {
   technicianOnboardingEmail,
 } from './templates/auth.templates';
 import { type RenderedEmail } from './templates/layout';
-import { maintenanceReminderEmail, type MaintenanceReminderInput } from './templates/maintenance.templates';
+import { maintenanceDigestEmail, type MaintenanceDigestInput } from './templates/maintenance.templates';
 
 /** Composes and delivers application emails. Never logs message bodies (they may hold credentials). */
 export class MailService {
@@ -48,8 +48,8 @@ export class MailService {
     await this.deliver(input.to, 'password-changed', passwordChangedEmail(input));
   }
 
-  async sendMaintenanceReminder(input: MaintenanceReminderInput & { to: string }): Promise<void> {
-    await this.deliver(input.to, 'maintenance-reminder', maintenanceReminderEmail(input));
+  async sendMaintenanceDigest(input: MaintenanceDigestInput & { to: string }): Promise<void> {
+    await this.deliver(input.to, 'maintenance-digest', maintenanceDigestEmail(input));
   }
 
   private async deliver(to: string, template: string, email: RenderedEmail): Promise<void> {

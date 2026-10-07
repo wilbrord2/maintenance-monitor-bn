@@ -11,6 +11,7 @@ import {
 } from 'typeorm';
 import { MaintenanceEventStatus } from '../common/enums/maintenance.enums';
 import { MachineLog } from '../machine-logs/machine-log.entity';
+import { MachinePart } from '../machine-parts/machine-part.entity';
 import { Machine } from '../machines/machine.entity';
 import { User } from '../users/user.entity';
 import { MaintenanceSchedule } from './maintenance-schedule.entity';
@@ -50,6 +51,15 @@ export class MaintenanceEvent {
   @JoinColumn({ name: 'machine_id', foreignKeyConstraintName: 'FK_maintenance_events_machine_id' })
   machine?: Machine;
 
+  /** The part maintained; null for machine-wide maintenance. Copied from the schedule. */
+  @Index('IDX_maintenance_events_machine_part_id')
+  @Column({ name: 'machine_part_id', type: 'integer', nullable: true })
+  machinePartId: number | null;
+
+  @ManyToOne(() => MachinePart, { nullable: true, onDelete: 'SET NULL', onUpdate: 'NO ACTION' })
+  @JoinColumn({ name: 'machine_part_id', foreignKeyConstraintName: 'FK_maintenance_events_machine_part_id' })
+  machinePart?: MachinePart | null;
+
   /** Technician who performed the maintenance; kept when the user is removed. */
   @Column({ name: 'performed_by_id', type: 'integer', nullable: true })
   performedById: number | null;
@@ -58,7 +68,7 @@ export class MaintenanceEvent {
   @JoinColumn({ name: 'performed_by_id', foreignKeyConstraintName: 'FK_maintenance_events_performed_by_id' })
   performedBy?: User | null;
 
-  /** Machine log opened when the maintenance started, linking it to the machine workflow. */
+  /** Machine or part log opened when the maintenance started, linking it to the machine workflow. */
   @Column({ name: 'machine_log_id', type: 'integer', nullable: true })
   machineLogId: number | null;
 
