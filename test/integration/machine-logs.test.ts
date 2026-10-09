@@ -81,12 +81,25 @@ describe('Machine logs', () => {
 
       const audits = await ctx.container.dataSource.getRepository(AuditLog).find({ order: { id: 'ASC' } });
       const logAudits = audits.filter((a) => a.action.startsWith('MACHINE_'));
-      expect(logAudits.map((a) => a.action)).toEqual(['MACHINE_LOG_CREATED', 'MACHINE_STATUS_CHANGED']);
+      // The system status change re-derives the machine status and operational status.
+      expect(logAudits.map((a) => a.action)).toEqual([
+        'MACHINE_LOG_CREATED',
+        'MACHINE_SYSTEM_STATUS_CHANGED',
+        'MACHINE_STATUS_CHANGED',
+        'MACHINE_OPERATIONAL_STATUS_CHANGED',
+      ]);
       expect(logAudits[1]).toMatchObject({
         userId: tech.user.id,
         entityId: String(machine.id),
+        oldValues: { systemStatus: 'ACTIVE' },
+        newValues: { systemStatus: 'UNDER_MAINTENANCE', logId: res.body.data.id },
+      });
+      expect(logAudits[2]).toMatchObject({
         oldValues: { status: 'ACTIVE' },
-        newValues: { status: 'UNDER_MAINTENANCE', logId: res.body.data.id },
+        newValues: {
+          status: 'UNDER_MAINTENANCE',
+          trigger: { type: 'MACHINE_LOG', logId: res.body.data.id, scope: 'MACHINE' },
+        },
       });
 
       expect(events).toEqual([

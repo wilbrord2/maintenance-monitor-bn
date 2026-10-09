@@ -6,7 +6,18 @@ import { type SessionService } from '../../auth/session.service';
 import { AppError } from '../../common/errors/app-error';
 import { ErrorCode } from '../../common/errors/error-codes';
 import { type DomainEventBus } from '../../common/events/domain-event-bus';
-import { MACHINE_STATUS_UPDATED, type MachineStatusUpdatedEvent } from '../../common/events/domain-events';
+import {
+  MACHINE_OPERATIONAL_STATUS_UPDATED,
+  MACHINE_PART_UPDATED,
+  MACHINE_STATUS_UPDATED,
+  MAINTENANCE_COMPLETED,
+  MAINTENANCE_REMINDER,
+  type MachineOperationalStatusUpdatedEvent,
+  type MachinePartUpdatedEvent,
+  type MachineStatusUpdatedEvent,
+  type MaintenanceCompletedEvent,
+  type MaintenanceReminderEvent,
+} from '../../common/events/domain-events';
 import { type AppLogger } from '../../common/logger/logger';
 import { type AppConfig } from '../../config/config';
 
@@ -19,6 +30,10 @@ const MAX_TIMER_MS = 2_147_483_647;
 
 interface ServerToClientEvents {
   [MACHINE_STATUS_UPDATED]: (payload: MachineStatusUpdatedEvent) => void;
+  [MACHINE_OPERATIONAL_STATUS_UPDATED]: (payload: MachineOperationalStatusUpdatedEvent) => void;
+  [MACHINE_PART_UPDATED]: (payload: MachinePartUpdatedEvent) => void;
+  [MAINTENANCE_REMINDER]: (payload: MaintenanceReminderEvent) => void;
+  [MAINTENANCE_COMPLETED]: (payload: MaintenanceCompletedEvent) => void;
   'session.expired': (payload: { reason: 'ACCESS_TOKEN_EXPIRED' }) => void;
 }
 
@@ -50,7 +65,7 @@ export class StatusBoardGateway {
     Record<string, never>,
     SocketData
   > | null = null;
-  private unsubscribe: (() => void) | null = null;
+  private unsubscribes: (() => void)[] = [];
 
   constructor(
     private readonly sessions: SessionService,
@@ -99,15 +114,31 @@ export class StatusBoardGateway {
       next(new Error(ErrorCode.ROUTE_NOT_FOUND));
     });
 
-    this.unsubscribe = this.events.subscribe(MACHINE_STATUS_UPDATED, (event) => {
-      board.to(STATUS_BOARD_ROOM).emit(MACHINE_STATUS_UPDATED, event);
-    });
+    // Mirrored to every dashboard; domain payloads carry no credentials.
+    const room = () => board.to(STATUS_BOARD_ROOM);
+    this.unsubscribes = [
+      this.events.subscribe(MACHINE_STATUS_UPDATED, (event) => {
+        room().emit(MACHINE_STATUS_UPDATED, event);
+      }),
+      this.events.subscribe(MACHINE_OPERATIONAL_STATUS_UPDATED, (event) => {
+        room().emit(MACHINE_OPERATIONAL_STATUS_UPDATED, event);
+      }),
+      this.events.subscribe(MACHINE_PART_UPDATED, (event) => {
+        room().emit(MACHINE_PART_UPDATED, event);
+      }),
+      this.events.subscribe(MAINTENANCE_REMINDER, (event) => {
+        room().emit(MAINTENANCE_REMINDER, event);
+      }),
+      this.events.subscribe(MAINTENANCE_COMPLETED, (event) => {
+        room().emit(MAINTENANCE_COMPLETED, event);
+      }),
+    ];
     this.server = server;
   }
 
   async close(): Promise<void> {
-    this.unsubscribe?.();
-    this.unsubscribe = null;
+    for (const unsubscribe of this.unsubscribes) unsubscribe();
+    this.unsubscribes = [];
     const server = this.server;
     this.server = null;
     if (server) await server.close();

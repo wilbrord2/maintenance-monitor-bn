@@ -18,20 +18,27 @@ describe('openSmtpSocket', () => {
     for (const socket of sockets.splice(0)) socket.destroy();
   });
 
+  // The test timeout is deliberately longer than the connect timeout, so a slow
+  // connect fails with the real ETIMEDOUT error instead of a bare Jest timeout.
   it('connects over IPv4 even when the hostname also resolves to an unusable IPv6 address', async () => {
     // "localhost" resolves to ::1 and 127.0.0.1; the server listens only on IPv4,
     // mirroring an SMTP host whose IPv6 address cannot be reached.
     const { server, port } = await listen('127.0.0.1');
+    let socket: Socket | undefined;
     try {
       const started = Date.now();
-      const socket = await openSmtpSocket('localhost', port, 5000);
-      sockets.push(socket);
+      socket = await openSmtpSocket('localhost', port, 5000);
       expect(socket.remoteAddress).toMatch(/127\.0\.0\.1$/);
+      // It must not stall waiting for the unusable IPv6 address.
       expect(Date.now() - started).toBeLessThan(2000);
     } finally {
+      // Destroy the client before closing the server: the server half-closes
+      // each connection and nobody reads from this socket, so the FIN is never
+      // consumed and `server.close()` would otherwise wait for it indefinitely.
+      socket?.destroy();
       await close(server);
     }
-  });
+  }, 15_000);
 
   it('rejects when nothing is listening', async () => {
     const { server, port } = await listen('127.0.0.1');

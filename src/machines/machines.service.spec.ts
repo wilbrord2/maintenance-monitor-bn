@@ -2,9 +2,12 @@ import { QueryFailedError, type EntityManager } from 'typeorm';
 import { type AuditService } from '../audit/audit.service';
 import { type AuthenticatedUser } from '../auth/auth.types';
 import { type TransactionRunner } from '../common/database/transaction-runner';
+import { MachineOperationalStatus } from '../common/enums/machine-operational-status.enum';
 import { MachineState } from '../common/enums/machine-state.enum';
 import { Role } from '../common/enums/role.enum';
 import { SYSTEM_REQUEST_META } from '../common/http/request-meta';
+import { type MachinePartsRepository } from '../machine-parts/machine-parts.repository';
+import { type MaintenanceRepository } from '../maintenance/maintenance.repository';
 import { type Machine } from './machine.entity';
 import { type MachinesRepository } from './machines.repository';
 import { MachinesService } from './machines.service';
@@ -25,6 +28,8 @@ function machine(overrides: Partial<Machine> = {}): Machine {
     name: 'Laser 1',
     serialNumber: 'LSR-1',
     status: MachineState.DOWNTIME,
+    systemStatus: MachineState.DOWNTIME,
+    operationalStatus: MachineOperationalStatus.OPERATING,
     description: null,
     isActive: true,
     createdAt: new Date(),
@@ -47,7 +52,20 @@ function setup() {
     run: jest.fn((work: (manager: EntityManager) => Promise<unknown>) => work({} as EntityManager)),
   } as unknown as jest.Mocked<TransactionRunner>;
   const audit = { record: jest.fn() } as unknown as jest.Mocked<AuditService>;
-  return { service: new MachinesService(repository, transactions, audit), repository, audit };
+  const parts = {
+    summariesByMachine: jest.fn().mockResolvedValue(new Map()),
+    findByMachine: jest.fn().mockResolvedValue([]),
+  } as unknown as jest.Mocked<MachinePartsRepository>;
+  const maintenance = {
+    findScheduleByMachine: jest.fn().mockResolvedValue(null),
+  } as unknown as jest.Mocked<MaintenanceRepository>;
+  return {
+    service: new MachinesService(repository, transactions, audit, parts, maintenance),
+    repository,
+    audit,
+    parts,
+    maintenance,
+  };
 }
 
 describe('MachinesService', () => {

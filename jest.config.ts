@@ -11,6 +11,7 @@ const config: Config = {
     '!src/**/*.spec.ts',
     '!src/main.ts',
     '!src/database/scripts/**',
+    '!src/notifications/mail/scripts/**',
     '!src/database/data-source.ts',
     '!src/database/migrations/**',
     '!src/**/*.d.ts',

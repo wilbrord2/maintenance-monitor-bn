@@ -3,6 +3,8 @@ import { protectedRoute, type RouteDefinition } from '../common/http/route';
 import { type AnalyticsController } from './analytics.controller';
 import {
   analyticsFaultsQuerySchema,
+  maintenanceAnalyticsResponseSchema,
+  partsAnalyticsResponseSchema,
   analyticsRangeQuerySchema,
   analyticsTopQuerySchema,
   downtimeResponseSchema,
@@ -66,6 +68,32 @@ export function analyticsRoutes(controller: AnalyticsController): RouteDefinitio
       query: analyticsTopQuerySchema,
       response: { status: 200, description: 'Technician activity', data: techniciansResponseSchema },
       handler: (ctx) => controller.technicians(ctx),
+    }),
+    protectedRoute({
+      method: 'get',
+      path: '/analytics/parts',
+      tags: TAGS,
+      summary: 'Part statuses, their impact on the fleet and the most problematic parts',
+      description: `Counts cover active parts of non-deleted machines. ${RANGE_NOTE}`,
+      roles: ROLES,
+      query: analyticsTopQuerySchema,
+      response: { status: 200, description: 'Part analytics', data: partsAnalyticsResponseSchema },
+      handler: (ctx) => controller.parts(ctx),
+    }),
+    protectedRoute({
+      method: 'get',
+      path: '/analytics/maintenance',
+      tags: TAGS,
+      summary: 'Recurring-maintenance compliance',
+      description: `Schedules by derived state plus completed/missed events in the range. ${RANGE_NOTE}`,
+      roles: ROLES,
+      query: analyticsTopQuerySchema,
+      response: {
+        status: 200,
+        description: 'Maintenance analytics',
+        data: maintenanceAnalyticsResponseSchema,
+      },
+      handler: (ctx) => controller.maintenance(ctx),
     }),
     protectedRoute({
       method: 'get',

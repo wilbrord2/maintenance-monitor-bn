@@ -104,6 +104,16 @@ export class UsersRepository {
     return buildPage(items, total, page);
   }
 
+  /** Active users who should receive operational notifications (all roles). */
+  findNotificationRecipients(): Promise<Pick<User, 'id' | 'email' | 'fullName' | 'role'>[]> {
+    return this.repo()
+      .createQueryBuilder('user')
+      .select(['user.id', 'user.email', 'user.fullName', 'user.role'])
+      .where('user.isActive = true')
+      .orderBy('user.id', 'ASC')
+      .getMany();
+  }
+
   /**
    * Atomically increments the failed-login counter. When the threshold is
    * reached the account is locked and the counter restarts, so concurrent

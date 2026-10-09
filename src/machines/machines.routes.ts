@@ -4,6 +4,7 @@ import { idParams } from '../common/validation/primitives';
 import { type MachinesController } from './machines.controller';
 import {
   createMachineSchema,
+  machineDetailResponseSchema,
   listMachinesQuerySchema,
   machineResponseSchema,
   updateMachineSchema,
@@ -46,10 +47,13 @@ export function machinesRoutes(controller: MachinesController): RouteDefinition[
       method: 'get',
       path: '/machines/:id',
       tags: TAGS,
-      summary: 'Get a machine',
+      summary: 'Get a machine with its parts and maintenance plan',
+      description:
+        'Returns the resolved `operationalStatus` together with the part conditions it was derived from. ' +
+        'Clients must not recompute machine status.',
       roles: ROLES,
       params: idParams,
-      response: { status: 200, description: 'Machine', data: machineResponseSchema },
+      response: { status: 200, description: 'Machine details', data: machineDetailResponseSchema },
       handler: (ctx) => controller.getById(ctx),
     }),
     protectedRoute({

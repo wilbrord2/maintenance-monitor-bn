@@ -15,6 +15,33 @@ function setup() {
     }),
     logStatusCounts: jest.fn().mockResolvedValue({ total: 4, open: 1, closed: 3 }),
     openLogsCount: jest.fn().mockResolvedValue(2),
+    machineOperationalCounts: jest
+      .fn()
+      .mockResolvedValue({ operating: 3, operatingWithDefects: 1, notOperating: 1 }),
+    partStatusCounts: jest.fn().mockResolvedValue({
+      total: 8,
+      active: 6,
+      underMaintenance: 1,
+      downtime: 1,
+      underTest: 0,
+      blocking: 1,
+      critical: 2,
+    }),
+    partIssueImpact: jest.fn().mockResolvedValue({ machinesWithPartIssues: 2, machinesStoppedByParts: 1 }),
+    problematicParts: jest.fn().mockResolvedValue([]),
+    partDowntimeHours: jest.fn().mockResolvedValue(4),
+    maintenanceScheduleCounts: jest
+      .fn()
+      .mockResolvedValue({ total: 2, active: 2, upcoming: 1, due: 1, overdue: 0 }),
+    maintenanceCompliance: jest.fn().mockResolvedValue({
+      completed: 3,
+      missed: 1,
+      cancelled: 0,
+      inProgress: 0,
+      scheduled: 1,
+      completedOnTime: 2,
+    }),
+    maintenanceByMachine: jest.fn().mockResolvedValue([]),
     totalDowntimeHours: jest.fn().mockResolvedValue(12.5),
     downtimeByMachine: jest
       .fn()
@@ -37,6 +64,17 @@ describe('AnalyticsService', () => {
     expect(overview).toEqual({
       range: { from: '2026-08-12T12:00:00.000Z', to: '2026-09-11T12:00:00.000Z', days: 30 },
       machines: { total: 5, active: 3, underMaintenance: 1, downtime: 1, underTest: 0, inactive: 0 },
+      machineOperational: { operating: 3, operatingWithDefects: 1, notOperating: 1 },
+      parts: {
+        total: 8,
+        active: 6,
+        underMaintenance: 1,
+        downtime: 1,
+        underTest: 0,
+        blocking: 1,
+        critical: 2,
+      },
+      maintenance: { total: 2, active: 2, upcoming: 1, due: 1, overdue: 0 },
       logs: { total: 4, open: 1, closed: 3, currentlyOpen: 2 },
       totalDowntimeHours: 12.5,
     });

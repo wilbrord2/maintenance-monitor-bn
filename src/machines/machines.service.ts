@@ -10,6 +10,14 @@ import { ErrorCode } from '../common/errors/error-codes';
 import { isUniqueViolation } from '../common/errors/database-errors';
 import { type RequestMeta } from '../common/http/request-meta';
 import { type Page } from '../common/pagination/pagination';
+import { type MachinePart } from '../machine-parts/machine-part.entity';
+import {
+  EMPTY_PART_SUMMARY,
+  type MachinePartSummary,
+  type MachinePartsRepository,
+} from '../machine-parts/machine-parts.repository';
+import { type MaintenanceSchedule } from '../maintenance/maintenance-schedule.entity';
+import { type MaintenanceRepository } from '../maintenance/maintenance.repository';
 import { type Machine } from './machine.entity';
 import { toMachineAuditSnapshot } from './machine.mapper';
 import { type CreateMachineDto, type ListMachinesQuery, type UpdateMachineDto } from './machines.dto';
@@ -18,19 +26,29 @@ import { EMPTY_ACTIVITY, type MachineActivitySummary, type MachinesRepository } 
 export interface MachineWithActivity {
   readonly machine: Machine;
   readonly activity: MachineActivitySummary;
+  readonly partSummary: MachinePartSummary;
+}
+
+/** Everything the frontend needs to render one machine, including its parts and plan. */
+export interface MachineDetail extends MachineWithActivity {
+  readonly parts: readonly MachinePart[];
+  readonly schedule: MaintenanceSchedule | null;
 }
 
 const SERIAL_EXISTS_MESSAGE = 'Machine serial number already exists';
 
 /**
- * Machine master data. Deliberately exposes no way to set `status`: status is
- * owned by MachineLogsService and changes only through machine-log operations.
+ * Machine master data. Deliberately exposes no way to set `status`: the system
+ * status changes only through machine logs (MachineLogsService), and the
+ * effective status is derived from it and the parts (MachineStatusSynchronizer).
  */
 export class MachinesService {
   constructor(
     private readonly machines: MachinesRepository,
     private readonly transactions: TransactionRunner,
     private readonly audit: AuditService,
+    private readonly parts: MachinePartsRepository,
+    private readonly maintenance: MaintenanceRepository,
   ) {}
 
   async create(dto: CreateMachineDto, actor: AuthenticatedUser, meta: RequestMeta): Promise<Machine> {
@@ -45,6 +63,7 @@ export class MachinesService {
             serialNumber: dto.serialNumber,
             description: dto.description ?? null,
             status: MachineState.ACTIVE,
+            systemStatus: MachineState.ACTIVE,
             isActive: true,
           }),
           manager,
@@ -69,24 +88,45 @@ export class MachinesService {
     const page = await this.machines.findPage(
       {
         ...(query.status ? { status: query.status } : {}),
+        ...(query.operationalStatus ? { operationalStatus: query.operationalStatus } : {}),
         ...(query.isActive !== undefined ? { isActive: query.isActive } : {}),
         ...(query.search ? { search: query.search } : {}),
       },
       { sortBy: query.sortBy, sortOrder: query.sortOrder },
       { page: query.page, limit: query.limit },
     );
-    const activity = await this.machines.activitySummaries(page.items.map((machine) => machine.id));
+    const machineIds = page.items.map((machine) => machine.id);
+    const [activity, partSummaries] = await Promise.all([
+      this.machines.activitySummaries(machineIds),
+      this.parts.summariesByMachine(machineIds),
+    ]);
     return {
-      items: page.items.map((machine) => ({ machine, activity: activity.get(machine.id) ?? EMPTY_ACTIVITY })),
+      items: page.items.map((machine) => ({
+        machine,
+        activity: activity.get(machine.id) ?? EMPTY_ACTIVITY,
+        partSummary: partSummaries.get(machine.id) ?? EMPTY_PART_SUMMARY,
+      })),
       meta: page.meta,
     };
   }
 
-  async getById(id: number): Promise<MachineWithActivity> {
+  /** Machine details with the part conditions its status was derived from and its maintenance plan. */
+  async getById(id: number): Promise<MachineDetail> {
     const machine = await this.machines.findById(id);
     if (!machine) throw AppError.notFound('Machine not found', ErrorCode.MACHINE_NOT_FOUND);
-    const activity = await this.machines.activitySummaries([id]);
-    return { machine, activity: activity.get(id) ?? EMPTY_ACTIVITY };
+    const [activity, partSummaries, parts, schedule] = await Promise.all([
+      this.machines.activitySummaries([id]),
+      this.parts.summariesByMachine([id]),
+      this.parts.findByMachine(id),
+      this.maintenance.findScheduleByMachine(id),
+    ]);
+    return {
+      machine,
+      activity: activity.get(id) ?? EMPTY_ACTIVITY,
+      partSummary: partSummaries.get(id) ?? EMPTY_PART_SUMMARY,
+      parts,
+      schedule,
+    };
   }
 
   async update(

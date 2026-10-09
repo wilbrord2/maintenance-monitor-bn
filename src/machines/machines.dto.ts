@@ -1,5 +1,8 @@
 import { z } from 'zod';
+import { MachineOperationalStatus } from '../common/enums/machine-operational-status.enum';
 import { MachineState } from '../common/enums/machine-state.enum';
+import { machinePartResponseSchema } from '../machine-parts/machine-parts.dto';
+import { maintenanceScheduleResponseSchema } from '../maintenance/maintenance.dto';
 import {
   booleanQuery,
   multilineText,
@@ -11,6 +14,9 @@ import {
 import { MACHINE_SORT_FIELDS } from './machines.repository';
 
 export const machineStateSchema = z.enum(MachineState).meta({ id: 'MachineState' });
+export const machineOperationalStatusSchema = z
+  .enum(MachineOperationalStatus)
+  .meta({ id: 'MachineOperationalStatus' });
 
 const serialNumber = z
   .string()
@@ -23,7 +29,7 @@ const serialNumber = z
 
 /**
  * Machine status is intentionally absent: new machines start ACTIVE and
- * status only changes through machine-log operations. `.strict()` rejects it.
+ * status only changes through machine logs (whole-machine or part). `.strict()` rejects it.
  */
 export const createMachineSchema = z
   .object({
@@ -50,6 +56,7 @@ export const listMachinesQuerySchema = paginationQuery
   .extend(sortingQuery(MACHINE_SORT_FIELDS, 'name', 'asc').shape)
   .extend({
     status: machineStateSchema.optional(),
+    operationalStatus: machineOperationalStatusSchema.optional(),
     isActive: booleanQuery.optional(),
     search: searchQuery,
   })
@@ -61,7 +68,13 @@ export const machineResponseSchema = z
     id: z.number().int(),
     name: z.string(),
     serialNumber: z.string(),
-    status: machineStateSchema,
+    status: machineStateSchema.meta({
+      description: 'Effective status: the most severe of systemStatus and the status of each active part',
+    }),
+    systemStatus: machineStateSchema.meta({
+      description: 'State of the machine as a whole system, set by whole-machine logs',
+    }),
+    operationalStatus: machineOperationalStatusSchema,
     description: z.string().nullable(),
     isActive: z.boolean(),
     activity: z.object({
@@ -69,7 +82,24 @@ export const machineResponseSchema = z
       openLogs: z.number().int(),
       lastActivityAt: z.iso.datetime().nullable(),
     }),
+    parts: z.object({
+      total: z.number().int(),
+      active: z.number().int(),
+      underMaintenance: z.number().int(),
+      downtime: z.number().int(),
+      underTest: z.number().int(),
+      blocking: z.number().int(),
+      critical: z.number().int(),
+    }),
     createdAt: z.iso.datetime(),
     updatedAt: z.iso.datetime(),
   })
   .meta({ id: 'Machine' });
+
+/** Machine details also carry the part conditions and the maintenance plan. */
+export const machineDetailResponseSchema = machineResponseSchema
+  .extend({
+    partDetails: z.array(machinePartResponseSchema),
+    maintenance: maintenanceScheduleResponseSchema.nullable(),
+  })
+  .meta({ id: 'MachineDetail' });

@@ -8,3 +8,9 @@ coverage/
 *.log
 .DS_Store
 appSetting.md
+setupDocs/
+
+# Local database dumps: these contain real user data and password hashes
+.backups/
+*.dump
+*.sql.gz

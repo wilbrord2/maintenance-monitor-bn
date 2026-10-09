@@ -7,6 +7,7 @@ import {
 import {
   adminSession,
   createMachine,
+  createPart,
   createSession,
   technicianSession,
   type Session,
@@ -97,9 +98,10 @@ describe('Live status board (Socket.IO)', () => {
       serialNumber: machine.serialNumber,
       previousStatus: 'ACTIVE',
       newStatus: 'UNDER_MAINTENANCE',
+      reason: 'Machine is under maintenance',
+      trigger: { type: 'MACHINE_LOG', logId: log.body.data.id, scope: 'MACHINE' },
       updatedBy: { id: tech.user.id, name: tech.user.fullName },
       logId: log.body.data.id,
-      source: 'MACHINE_LOG_CREATED',
       timestamp: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
     });
     expect(eventB).toEqual(eventA);
@@ -195,6 +197,60 @@ describe('Live status board (Socket.IO)', () => {
     } finally {
       await shortLived.container.close();
     }
+  });
+
+  it('broadcasts part changes and the derived machine status to dashboards', async () => {
+    const tech = await technicianSession(ctx);
+    const machine = await createMachine(ctx, { name: 'Press 9' });
+    const part = await createPart(ctx, machine.id, { partCode: 'A1', isCritical: true });
+
+    const board = connect({ token: tech.accessToken });
+    await connected(board);
+
+    const partUpdate = new Promise<Record<string, unknown>>((resolve) =>
+      board.once('machine.part.updated', resolve),
+    );
+    const statusUpdate = new Promise<Record<string, unknown>>((resolve) =>
+      board.once('machine.operational-status.updated', resolve),
+    );
+    const machineStatusUpdate = new Promise<Record<string, unknown>>((resolve) =>
+      board.once('machine.status.updated', resolve),
+    );
+
+    const log = await request(ctx.app)
+      .post('/api/v1/machine-logs')
+      .set(tech.auth)
+      .send({
+        machineId: machine.id,
+        machinePartId: part.id,
+        resultingState: 'DOWNTIME',
+        faultDescription: 'Seized bearing',
+      })
+      .expect(201);
+    const trigger = { type: 'MACHINE_LOG', logId: log.body.data.id, scope: 'PART', partId: part.id };
+
+    await expect(partUpdate).resolves.toMatchObject({
+      machineId: machine.id,
+      partId: part.id,
+      partCode: 'A1',
+      previousStatus: 'ACTIVE',
+      newStatus: 'DOWNTIME',
+      operationalImpact: 'BLOCKING',
+      updatedBy: { id: tech.user.id, name: tech.user.fullName },
+    });
+    await expect(statusUpdate).resolves.toMatchObject({
+      machineId: machine.id,
+      previousStatus: 'OPERATING',
+      newStatus: 'NOT_OPERATING',
+      trigger,
+    });
+    // The machine itself is no longer reported ACTIVE while a part is down.
+    await expect(machineStatusUpdate).resolves.toMatchObject({
+      machineId: machine.id,
+      previousStatus: 'ACTIVE',
+      newStatus: 'DOWNTIME',
+      trigger,
+    });
   });
 
   it('refuses the root namespace', async () => {

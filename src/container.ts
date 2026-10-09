@@ -40,10 +40,21 @@ import { MachineLogsService } from './machine-logs/machine-logs.service';
 import { DowntimeCalculator } from './machine-logs/policies/downtime-calculator';
 import { DEFAULT_MACHINE_LOG_RULES, MachineLogRules } from './machine-logs/policies/machine-log-rules.policy';
 import { MachineStateTransitionPolicy } from './machine-logs/policies/machine-state-transition.policy';
+import { MachinePartsController } from './machine-parts/machine-parts.controller';
+import { MachinePartsRepository } from './machine-parts/machine-parts.repository';
+import { machinePartsRoutes } from './machine-parts/machine-parts.routes';
+import { MachinePartsService } from './machine-parts/machine-parts.service';
+import { MachineStatusResolver } from './machines/machine-status.resolver';
+import { MachineStatusSynchronizer } from './machines/machine-status.synchronizer';
 import { MachinesController } from './machines/machines.controller';
 import { MachinesRepository } from './machines/machines.repository';
 import { machinesRoutes } from './machines/machines.routes';
 import { MachinesService } from './machines/machines.service';
+import { MaintenanceController } from './maintenance/maintenance.controller';
+import { MaintenanceRepository } from './maintenance/maintenance.repository';
+import { maintenanceRoutes } from './maintenance/maintenance.routes';
+import { MaintenanceSchedulerService } from './maintenance/maintenance-scheduler.service';
+import { MaintenanceService } from './maintenance/maintenance.service';
 import { MailService } from './notifications/mail/mail.service';
 import { type MailTransport } from './notifications/mail/mail.transport';
 import { SmtpMailTransport } from './notifications/mail/smtp-mail.transport';
@@ -73,6 +84,7 @@ export interface Container {
   readonly events: DomainEventBus;
   readonly statusBoard: StatusBoardGateway;
   readonly tokenCleanup: TokenCleanupService;
+  readonly maintenanceScheduler: MaintenanceSchedulerService;
   readonly authenticate: RequestHandler;
   readonly routes: readonly RouteDefinition[];
   readonly services: {
@@ -82,6 +94,8 @@ export interface Container {
     readonly users: UsersService;
     readonly machines: MachinesService;
     readonly machineLogs: MachineLogsService;
+    readonly machineParts: MachinePartsService;
+    readonly maintenance: MaintenanceService;
     readonly analytics: AnalyticsService;
     readonly audit: AuditService;
     readonly hasher: PasswordHasher;
@@ -119,6 +133,8 @@ export async function createContainer(
   const resetTokenRepository = new PasswordResetTokenRepository(dataSource);
   const machinesRepository = new MachinesRepository(dataSource);
   const machineLogsRepository = new MachineLogsRepository(dataSource);
+  const machinePartsRepository = new MachinePartsRepository(dataSource);
+  const maintenanceRepository = new MaintenanceRepository(dataSource);
 
   // --- Auth & users
   const tokens = new TokenService(config.jwt, clock);
@@ -155,18 +171,72 @@ export async function createContainer(
   );
   const tokenCleanup = new TokenCleanupService(refreshTokenRepository, resetTokenRepository, clock, logger);
 
-  // --- Machines & machine logs
-  const machines = new MachinesService(machinesRepository, transactions, audit);
+  // --- Machines, parts and machine logs
+  // One resolver and one synchronizer are shared by every write path that can
+  // change a machine's derived operational status.
+  const statusResolver = new MachineStatusResolver();
+  const statusSynchronizer = new MachineStatusSynchronizer(
+    statusResolver,
+    machinesRepository,
+    machinePartsRepository,
+    audit,
+    events,
+  );
+  const transitionPolicy = new MachineStateTransitionPolicy();
+  const logRules = new MachineLogRules(DEFAULT_MACHINE_LOG_RULES);
+  const downtimeCalculator = new DowntimeCalculator();
+
+  const machines = new MachinesService(
+    machinesRepository,
+    transactions,
+    audit,
+    machinePartsRepository,
+    maintenanceRepository,
+  );
   const machineLogs = new MachineLogsService(
     machineLogsRepository,
     machinesRepository,
-    new MachineStateTransitionPolicy(),
-    new MachineLogRules(DEFAULT_MACHINE_LOG_RULES),
-    new DowntimeCalculator(),
+    machinePartsRepository,
+    transitionPolicy,
+    logRules,
+    downtimeCalculator,
+    transactions,
+    audit,
+    events,
+    statusSynchronizer,
+    clock,
+  );
+  const machineParts = new MachinePartsService(
+    machinePartsRepository,
+    machineLogsRepository,
+    machinesRepository,
+    statusSynchronizer,
+    transactions,
+    audit,
+    clock,
+  );
+
+  // --- Recurring maintenance
+  // Maintenance drives machine status only through MachineLogsService, the
+  // existing machine workflow, which recalculates the derived status.
+  const maintenance = new MaintenanceService(
+    maintenanceRepository,
+    machinesRepository,
+    machineLogs,
     transactions,
     audit,
     events,
     clock,
+    logger,
+  );
+  const maintenanceScheduler = new MaintenanceSchedulerService(
+    maintenanceRepository,
+    usersRepository,
+    mail,
+    audit,
+    events,
+    clock,
+    logger,
   );
 
   // --- Analytics
@@ -181,8 +251,10 @@ export async function createContainer(
     ...healthRoutes(new HealthController(new HealthService(dataSource, mailTransport, version))),
     ...authRoutes(new AuthController(auth, passwords, config.auth), rateLimiters),
     ...usersRoutes(new UsersController(users)),
-    ...machinesRoutes(new MachinesController(machines)),
+    ...machinesRoutes(new MachinesController(machines, clock)),
     ...machineLogsRoutes(new MachineLogsController(machineLogs, DEFAULT_MACHINE_LOG_RULES)),
+    ...machinePartsRoutes(new MachinePartsController(machineParts)),
+    ...maintenanceRoutes(new MaintenanceController(maintenance, clock)),
     ...analyticsRoutes(new AnalyticsController(analytics)),
     ...auditRoutes(new AuditController(new AuditQueryService(auditRepository))),
   ];
@@ -198,11 +270,25 @@ export async function createContainer(
     events,
     statusBoard,
     tokenCleanup,
+    maintenanceScheduler,
     authenticate,
     routes,
-    services: { auth, sessions, passwords, users, machines, machineLogs, analytics, audit, hasher },
+    services: {
+      auth,
+      sessions,
+      passwords,
+      users,
+      machines,
+      machineLogs,
+      machineParts,
+      maintenance,
+      analytics,
+      audit,
+      hasher,
+    },
     async close() {
       tokenCleanup.stop();
+      maintenanceScheduler.stop();
       await statusBoard.close();
       mailTransport.close();
       if (dataSource.isInitialized) await dataSource.destroy();
