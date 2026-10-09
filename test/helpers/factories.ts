@@ -188,6 +188,8 @@ export async function createSchedule(
   options: {
     intervalDays: number;
     nextMaintenanceAt: Date;
+    machinePartId?: number | null;
+    taskName?: string;
     lastMaintenanceAt?: Date | null;
     reminderDaysBefore?: number;
     isActive?: boolean;
@@ -197,10 +199,12 @@ export async function createSchedule(
   return repository.save(
     repository.create({
       machineId,
+      machinePartId: options.machinePartId ?? null,
+      taskName: options.taskName ?? `Task ${next()}`,
       intervalDays: options.intervalDays,
       nextMaintenanceAt: options.nextMaintenanceAt,
       lastMaintenanceAt: options.lastMaintenanceAt ?? null,
-      reminderDaysBefore: options.reminderDaysBefore ?? 3,
+      reminderDaysBefore: options.reminderDaysBefore ?? Math.min(3, options.intervalDays),
       isActive: options.isActive ?? true,
     }),
   );

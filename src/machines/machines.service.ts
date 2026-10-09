@@ -32,7 +32,8 @@ export interface MachineWithActivity {
 /** Everything the frontend needs to render one machine, including its parts and plan. */
 export interface MachineDetail extends MachineWithActivity {
   readonly parts: readonly MachinePart[];
-  readonly schedule: MaintenanceSchedule | null;
+  /** Machine-wide and part maintenance tasks. */
+  readonly schedules: readonly MaintenanceSchedule[];
 }
 
 const SERIAL_EXISTS_MESSAGE = 'Machine serial number already exists';
@@ -114,18 +115,18 @@ export class MachinesService {
   async getById(id: number): Promise<MachineDetail> {
     const machine = await this.machines.findById(id);
     if (!machine) throw AppError.notFound('Machine not found', ErrorCode.MACHINE_NOT_FOUND);
-    const [activity, partSummaries, parts, schedule] = await Promise.all([
+    const [activity, partSummaries, parts, schedules] = await Promise.all([
       this.machines.activitySummaries([id]),
       this.parts.summariesByMachine([id]),
       this.parts.findByMachine(id),
-      this.maintenance.findScheduleByMachine(id),
+      this.maintenance.findSchedulesByMachine(id),
     ]);
     return {
       machine,
       activity: activity.get(id) ?? EMPTY_ACTIVITY,
       partSummary: partSummaries.get(id) ?? EMPTY_PART_SUMMARY,
       parts,
-      schedule,
+      schedules,
     };
   }
 

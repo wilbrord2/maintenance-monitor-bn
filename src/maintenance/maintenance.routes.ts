@@ -9,6 +9,7 @@ import {
   createMaintenanceEventSchema,
   createMaintenanceScheduleSchema,
   listMaintenanceEventsQuerySchema,
+  listMaintenanceSchedulesQuerySchema,
   maintenanceDashboardQuerySchema,
   maintenanceEventResponseSchema,
   maintenanceScheduleResponseSchema,
@@ -23,46 +24,64 @@ const ADMIN = [Role.ADMIN] as const;
 const machineParams = z.object({ machineId: positiveId });
 
 const CYCLE_NOTE =
+  'Each schedule is a recurring task for one part, or for the machine as a whole, with its own interval. ' +
   'Due dates come from the maintenance history: the next due date is the last completion plus the interval. ' +
   'UPCOMING / DUE / OVERDUE are derived on read and never change the machine status.';
+const DASHBOARD_NOTE = 'Filter by `machineId`, `machinePartId` or `scope` (machine-wide or part tasks).';
 
 export function maintenanceRoutes(controller: MaintenanceController): RouteDefinition[] {
   return [
     protectedRoute({
       method: 'post',
-      path: '/machines/:machineId/maintenance',
+      path: '/machines/:machineId/maintenance-schedules',
       tags: SCHEDULE_TAGS,
-      summary: 'Create the recurring maintenance schedule of a machine',
-      description: `One schedule per machine. ${CYCLE_NOTE}`,
+      summary: 'Create a recurring maintenance task for a part or for the whole machine',
+      description:
+        `Set \`machinePartId\` for a part inspection (e.g. "Cutting head", weekly); omit it for a machine-wide ` +
+        `task (e.g. "External cleaning", daily). Task names are unique per part and per machine. ${CYCLE_NOTE}`,
       roles: ADMIN,
       params: machineParams,
       body: createMaintenanceScheduleSchema,
       response: { status: 201, description: 'Schedule created', data: maintenanceScheduleResponseSchema },
-      errors: [409, 422],
+      errors: [404, 409, 422],
       handler: (ctx) => controller.createSchedule(ctx),
     }),
     protectedRoute({
       method: 'get',
-      path: '/machines/:machineId/maintenance',
+      path: '/machines/:machineId/maintenance-schedules',
       tags: SCHEDULE_TAGS,
-      summary: 'Get the maintenance schedule of a machine',
-      description: CYCLE_NOTE,
+      summary: 'List the maintenance schedules of a machine',
+      description: `Machine-wide tasks first, then part tasks, each by due date. ${CYCLE_NOTE}`,
       roles: ROLES,
       params: machineParams,
+      query: listMaintenanceSchedulesQuerySchema,
+      response: { status: 200, description: 'Schedules', data: z.array(maintenanceScheduleResponseSchema) },
+      handler: (ctx) => controller.listSchedules(ctx),
+    }),
+    protectedRoute({
+      method: 'get',
+      path: '/maintenance-schedules/:id',
+      tags: SCHEDULE_TAGS,
+      summary: 'Get a maintenance schedule',
+      description: CYCLE_NOTE,
+      roles: ROLES,
+      params: idParams,
       response: { status: 200, description: 'Schedule', data: maintenanceScheduleResponseSchema },
       handler: (ctx) => controller.getSchedule(ctx),
     }),
     protectedRoute({
       method: 'patch',
-      path: '/machines/:machineId/maintenance',
+      path: '/maintenance-schedules/:id',
       tags: SCHEDULE_TAGS,
-      summary: 'Update the maintenance schedule of a machine',
-      description: 'Changing the interval or the last maintenance date recalculates the due date.',
+      summary: 'Update a maintenance schedule',
+      description:
+        'Changing the interval or the last maintenance date recalculates the due date. ' +
+        'Set `isActive: false` to stop a task.',
       roles: ADMIN,
-      params: machineParams,
+      params: idParams,
       body: updateMaintenanceScheduleSchema,
       response: { status: 200, description: 'Updated schedule', data: maintenanceScheduleResponseSchema },
-      errors: [422],
+      errors: [409, 422],
       handler: (ctx) => controller.updateSchedule(ctx),
     }),
     protectedRoute({
@@ -70,6 +89,7 @@ export function maintenanceRoutes(controller: MaintenanceController): RouteDefin
       path: '/maintenance/upcoming',
       tags: SCHEDULE_TAGS,
       summary: 'Schedules approaching their due date (inside the reminder window)',
+      description: DASHBOARD_NOTE,
       roles: ROLES,
       query: maintenanceDashboardQuerySchema,
       response: {
@@ -85,6 +105,7 @@ export function maintenanceRoutes(controller: MaintenanceController): RouteDefin
       path: '/maintenance/due',
       tags: SCHEDULE_TAGS,
       summary: 'Schedules due today',
+      description: DASHBOARD_NOTE,
       roles: ROLES,
       query: maintenanceDashboardQuerySchema,
       response: {
@@ -100,6 +121,7 @@ export function maintenanceRoutes(controller: MaintenanceController): RouteDefin
       path: '/maintenance/overdue',
       tags: SCHEDULE_TAGS,
       summary: 'Schedules past their due date',
+      description: DASHBOARD_NOTE,
       roles: ROLES,
       query: maintenanceDashboardQuerySchema,
       response: {
@@ -116,7 +138,9 @@ export function maintenanceRoutes(controller: MaintenanceController): RouteDefin
       tags: EVENT_TAGS,
       summary: 'Create a maintenance event',
       description:
-        'Links to the machine schedule when one exists. Only one event per schedule may be open at a time.',
+        'Planned maintenance passes `maintenanceScheduleId` (machine and part come from the schedule); ' +
+        'one-off maintenance passes `machineId` and optionally `machinePartId`. Only one event per schedule ' +
+        'may be open at a time.',
       roles: ROLES,
       body: createMaintenanceEventSchema,
       response: { status: 201, description: 'Event created', data: maintenanceEventResponseSchema },
@@ -167,8 +191,8 @@ export function maintenanceRoutes(controller: MaintenanceController): RouteDefin
       tags: EVENT_TAGS,
       summary: 'Start a scheduled maintenance',
       description:
-        'Moves the event to IN_PROGRESS and, unless `putMachineUnderMaintenance` is false, opens a machine ' +
-        'log that sets the machine to UNDER_MAINTENANCE through the existing workflow.',
+        'Moves the event to IN_PROGRESS and, unless `putUnderMaintenance` is false, opens a log through the ' +
+        'existing workflow that sets the part (part maintenance) or the machine to UNDER_MAINTENANCE.',
       roles: ROLES,
       params: idParams,
       body: startMaintenanceEventSchema,
@@ -183,7 +207,7 @@ export function maintenanceRoutes(controller: MaintenanceController): RouteDefin
       summary: 'Complete a maintenance',
       description:
         'Records the actual completion time, rolls the schedule forward (completion + interval) in the same ' +
-        'transaction and closes the machine log opened at start, re-deriving the machine status from its parts.',
+        'transaction and closes the log opened at start, re-deriving the machine status from its parts.',
       roles: ROLES,
       params: idParams,
       body: completeMaintenanceEventSchema,

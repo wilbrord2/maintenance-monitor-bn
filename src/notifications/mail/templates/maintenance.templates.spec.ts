@@ -1,55 +1,62 @@
 import { MaintenanceScheduleState } from '../../../common/enums/maintenance.enums';
-import { maintenanceReminderEmail } from './maintenance.templates';
+import { type MaintenanceDigestItem, maintenanceDigestEmail } from './maintenance.templates';
 
-const base = {
-  fullName: 'Jo',
+const item = (overrides: Partial<MaintenanceDigestItem>): MaintenanceDigestItem => ({
   machineName: 'Press 1',
   serialNumber: 'PRS-1',
+  partName: null,
+  taskName: 'External cleaning',
+  state: MaintenanceScheduleState.DUE,
   dueOn: '2026-10-20',
-  intervalDays: 15,
-};
+  daysUntilDue: 0,
+  intervalDays: 1,
+  ...overrides,
+});
 
-describe('maintenanceReminderEmail', () => {
-  it('describes an upcoming reminder, singular and plural', () => {
-    const plural = maintenanceReminderEmail({
-      ...base,
-      state: MaintenanceScheduleState.UPCOMING,
-      daysUntilDue: 3,
+describe('maintenanceDigestEmail', () => {
+  it('summarises the tasks by state in the subject, overdue first', () => {
+    const email = maintenanceDigestEmail({
+      fullName: 'Jo',
+      items: [
+        item({ state: MaintenanceScheduleState.UPCOMING, daysUntilDue: 3 }),
+        item({ state: MaintenanceScheduleState.OVERDUE, daysUntilDue: -2 }),
+        item({}),
+        item({ state: MaintenanceScheduleState.OVERDUE, daysUntilDue: -1 }),
+      ],
     });
-    expect(plural.subject).toBe('Maintenance due in 3 days — Press 1');
-
-    const singular = maintenanceReminderEmail({
-      ...base,
-      state: MaintenanceScheduleState.UPCOMING,
-      daysUntilDue: 1,
-    });
-    expect(singular.subject).toBe('Maintenance due in 1 day — Press 1');
+    expect(email.subject).toBe('Maintenance: 2 overdue, 1 due today, 1 upcoming');
+    expect(email.text.indexOf('overdue by 2 days')).toBeLessThan(email.text.indexOf('overdue by 1 day'));
+    expect(email.text.indexOf('overdue by 1 day')).toBeLessThan(email.text.indexOf('due today ('));
   });
 
-  it('describes due and overdue reminders', () => {
-    expect(
-      maintenanceReminderEmail({ ...base, state: MaintenanceScheduleState.DUE, daysUntilDue: 0 }).subject,
-    ).toBe('Maintenance due today — Press 1');
-    expect(
-      maintenanceReminderEmail({ ...base, state: MaintenanceScheduleState.OVERDUE, daysUntilDue: -1 })
-        .subject,
-    ).toBe('Maintenance overdue by 1 day — Press 1');
-    expect(
-      maintenanceReminderEmail({ ...base, state: MaintenanceScheduleState.OVERDUE, daysUntilDue: -4 })
-        .subject,
-    ).toBe('Maintenance overdue by 4 days — Press 1');
+  it('names the part and task, singular and plural', () => {
+    const email = maintenanceDigestEmail({
+      fullName: 'Jo',
+      items: [
+        item({
+          partName: 'Cutting head',
+          taskName: 'Cutting head',
+          state: MaintenanceScheduleState.UPCOMING,
+          daysUntilDue: 1,
+          intervalDays: 7,
+        }),
+        item({ partName: 'Hydraulic system', taskName: 'Oil change', intervalDays: 30 }),
+      ],
+    });
+    expect(email.text).toContain(
+      'Press 1 (PRS-1): Cutting head — due in 1 day (due 2026-10-20, every 7 days)',
+    );
+    expect(email.text).toContain('Hydraulic system — Oil change — due today');
+    expect(email.text).toContain('2 maintenance tasks need attention');
   });
 
-  it('escapes machine names in HTML and states the due date and interval', () => {
-    const email = maintenanceReminderEmail({
-      ...base,
-      machineName: '<script>alert(1)</script>',
-      state: MaintenanceScheduleState.DUE,
-      daysUntilDue: 0,
+  it('escapes names in HTML', () => {
+    const email = maintenanceDigestEmail({
+      fullName: 'Jo',
+      items: [item({ machineName: '<script>alert(1)</script>' })],
     });
     expect(email.html).not.toContain('<script>');
     expect(email.html).toContain('&lt;script&gt;');
-    expect(email.text).toContain('2026-10-20');
-    expect(email.text).toContain('every 15 days');
+    expect(email.text).toContain('1 maintenance task needs attention');
   });
 });

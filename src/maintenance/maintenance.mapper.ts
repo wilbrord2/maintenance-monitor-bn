@@ -2,16 +2,34 @@ import {
   type MaintenanceEventStatus,
   type MaintenanceScheduleState,
 } from '../common/enums/maintenance.enums';
+import { type MachinePart } from '../machine-parts/machine-part.entity';
 import { toMachineSummary, type MachineSummary } from '../machines/machine.mapper';
 import { toUserSummary, type UserSummary } from '../users/user.mapper';
 import { type MaintenanceEvent } from './maintenance-event.entity';
 import { type MaintenanceSchedule } from './maintenance-schedule.entity';
 import { resolveScheduleStatus } from './policies/maintenance-cycle';
 
+export interface MaintenancePartSummary {
+  readonly id: number;
+  readonly name: string;
+  readonly partCode: string;
+}
+
+export function toMaintenancePartSummary(
+  part: Pick<MachinePart, 'id' | 'name' | 'partCode'>,
+): MaintenancePartSummary {
+  return { id: part.id, name: part.name, partCode: part.partCode };
+}
+
 export interface MaintenanceScheduleResponse {
   readonly id: number;
   readonly machineId: number;
   readonly machine: MachineSummary | null;
+  /** Null for a machine-wide task. */
+  readonly machinePartId: number | null;
+  readonly machinePart: MaintenancePartSummary | null;
+  readonly taskName: string;
+  readonly description: string | null;
   readonly intervalDays: number;
   readonly reminderDaysBefore: number;
   readonly lastMaintenanceAt: string | null;
@@ -33,6 +51,10 @@ export function toMaintenanceScheduleResponse(
     id: schedule.id,
     machineId: schedule.machineId,
     machine: schedule.machine ? toMachineSummary(schedule.machine) : null,
+    machinePartId: schedule.machinePartId,
+    machinePart: schedule.machinePart ? toMaintenancePartSummary(schedule.machinePart) : null,
+    taskName: schedule.taskName,
+    description: schedule.description,
     intervalDays: schedule.intervalDays,
     reminderDaysBefore: schedule.reminderDaysBefore,
     lastMaintenanceAt: schedule.lastMaintenanceAt?.toISOString() ?? null,
@@ -48,6 +70,9 @@ export function toMaintenanceScheduleResponse(
 export function toMaintenanceScheduleAuditSnapshot(schedule: MaintenanceSchedule): Record<string, unknown> {
   return {
     machineId: schedule.machineId,
+    machinePartId: schedule.machinePartId,
+    taskName: schedule.taskName,
+    description: schedule.description,
     intervalDays: schedule.intervalDays,
     reminderDaysBefore: schedule.reminderDaysBefore,
     lastMaintenanceAt: schedule.lastMaintenanceAt,
@@ -59,7 +84,11 @@ export function toMaintenanceScheduleAuditSnapshot(schedule: MaintenanceSchedule
 export interface MaintenanceEventResponse {
   readonly id: number;
   readonly maintenanceScheduleId: number | null;
+  /** The schedule's task; null for one-off maintenance. */
+  readonly taskName: string | null;
   readonly machine: MachineSummary | null;
+  readonly machinePartId: number | null;
+  readonly machinePart: MaintenancePartSummary | null;
   readonly performedBy: UserSummary | null;
   readonly machineLogId: number | null;
   readonly scheduledFor: string;
@@ -75,7 +104,10 @@ export function toMaintenanceEventResponse(event: MaintenanceEvent): Maintenance
   return {
     id: event.id,
     maintenanceScheduleId: event.maintenanceScheduleId,
+    taskName: event.maintenanceSchedule?.taskName ?? null,
     machine: event.machine ? toMachineSummary(event.machine) : null,
+    machinePartId: event.machinePartId,
+    machinePart: event.machinePart ? toMaintenancePartSummary(event.machinePart) : null,
     performedBy: event.performedBy ? toUserSummary(event.performedBy) : null,
     machineLogId: event.machineLogId,
     scheduledFor: event.scheduledFor.toISOString(),
@@ -92,6 +124,7 @@ export function toMaintenanceEventAuditSnapshot(event: MaintenanceEvent): Record
   return {
     maintenanceScheduleId: event.maintenanceScheduleId,
     machineId: event.machineId,
+    machinePartId: event.machinePartId,
     performedById: event.performedById,
     machineLogId: event.machineLogId,
     scheduledFor: event.scheduledFor,

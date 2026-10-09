@@ -214,6 +214,7 @@ export async function createContainer(
     transactions,
     audit,
     clock,
+    maintenanceRepository,
   );
 
   // --- Recurring maintenance
@@ -222,6 +223,7 @@ export async function createContainer(
   const maintenance = new MaintenanceService(
     maintenanceRepository,
     machinesRepository,
+    machinePartsRepository,
     machineLogs,
     transactions,
     audit,
@@ -253,7 +255,7 @@ export async function createContainer(
     ...usersRoutes(new UsersController(users)),
     ...machinesRoutes(new MachinesController(machines, clock)),
     ...machineLogsRoutes(new MachineLogsController(machineLogs, DEFAULT_MACHINE_LOG_RULES)),
-    ...machinePartsRoutes(new MachinePartsController(machineParts)),
+    ...machinePartsRoutes(new MachinePartsController(machineParts, clock)),
     ...maintenanceRoutes(new MaintenanceController(maintenance, clock)),
     ...analyticsRoutes(new AnalyticsController(analytics)),
     ...auditRoutes(new AuditController(new AuditQueryService(auditRepository))),

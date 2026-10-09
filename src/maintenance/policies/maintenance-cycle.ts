@@ -1,6 +1,7 @@
 import { MaintenanceReminderKind, MaintenanceScheduleState } from '../../common/enums/maintenance.enums';
 
 const MS_PER_DAY = 86_400_000;
+const DEFAULT_REMINDER_DAYS = 3;
 
 /** Start of the UTC calendar day containing `date`. */
 export function startOfUtcDay(date: Date): Date {
@@ -39,6 +40,11 @@ export function initialNextMaintenance(input: {
   if (input.nextMaintenanceAt) return input.nextMaintenanceAt;
   if (input.lastMaintenanceAt) return nextMaintenanceAfter(input.lastMaintenanceAt, input.intervalDays);
   return addDays(input.now, input.intervalDays);
+}
+
+/** Reminders start 3 days ahead, but always before the due day (so a daily task gets 0). */
+export function defaultReminderDays(intervalDays: number): number {
+  return Math.max(0, Math.min(DEFAULT_REMINDER_DAYS, intervalDays - 1));
 }
 
 export interface ScheduleStatus {

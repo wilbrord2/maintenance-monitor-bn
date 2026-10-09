@@ -12,6 +12,7 @@ import { type Machine } from '../machines/machine.entity';
 import { type MachineStatusSynchronizer } from '../machines/machine-status.synchronizer';
 import { type MachinesRepository } from '../machines/machines.repository';
 import { type MachinePart } from './machine-part.entity';
+import { type MaintenanceRepository } from '../maintenance/maintenance.repository';
 import { MachinePartsService } from './machine-parts.service';
 import { type MachinePartsRepository } from './machine-parts.repository';
 
@@ -113,10 +114,22 @@ function setup(options: { part?: MachinePart; machine?: Machine } = {}) {
 
   const audit = { record: jest.fn() } as unknown as jest.Mocked<AuditService>;
 
-  const service = new MachinePartsService(parts, logs, machines, statusSync, transactions, audit, {
-    now: () => NOW,
-  });
-  return { service, parts, logs, machines, statusSync, audit, order, currentPart };
+  const maintenance = {
+    deactivateSchedulesForPart: jest.fn().mockResolvedValue([31, 32]),
+    findNextSchedulesForParts: jest.fn().mockResolvedValue(new Map()),
+  } as unknown as jest.Mocked<MaintenanceRepository>;
+
+  const service = new MachinePartsService(
+    parts,
+    logs,
+    machines,
+    statusSync,
+    transactions,
+    audit,
+    { now: () => NOW },
+    maintenance,
+  );
+  return { service, parts, logs, machines, statusSync, audit, maintenance, order, currentPart };
 }
 
 describe('MachinePartsService part administration', () => {
@@ -129,17 +142,29 @@ describe('MachinePartsService part administration', () => {
     expect(parts.softDelete).not.toHaveBeenCalled();
   });
 
-  it('recalculates machine status after a part is deleted', async () => {
-    const { service, parts, statusSync } = setup();
+  it('recalculates machine status and stops maintenance after a part is deleted', async () => {
+    const { service, parts, statusSync, maintenance, audit } = setup();
     await service.removePart(10, 7, technician, SYSTEM_REQUEST_META);
     expect(parts.softDelete).toHaveBeenCalledWith(7, expect.anything());
+    expect(maintenance.deactivateSchedulesForPart).toHaveBeenCalledWith(7, expect.anything());
+    expect(audit.record).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'MAINTENANCE_SCHEDULE_UPDATED', entityId: 32 }),
+      expect.anything(),
+    );
     expect(statusSync.synchronize).toHaveBeenCalled();
   });
 
-  it('recalculates machine status when criticality changes', async () => {
-    const { service, statusSync } = setup();
+  it('recalculates machine status when criticality changes, keeping its schedules', async () => {
+    const { service, statusSync, maintenance } = setup();
     await service.updatePart(10, 7, { isCritical: true }, technician, SYSTEM_REQUEST_META);
     expect(statusSync.synchronize).toHaveBeenCalled();
+    expect(maintenance.deactivateSchedulesForPart).not.toHaveBeenCalled();
+  });
+
+  it('stops maintenance of a deactivated part', async () => {
+    const { service, maintenance } = setup();
+    await service.updatePart(10, 7, { isActive: false }, technician, SYSTEM_REQUEST_META);
+    expect(maintenance.deactivateSchedulesForPart).toHaveBeenCalledWith(7, expect.anything());
   });
 
   it('rejects a part that belongs to another machine', async () => {

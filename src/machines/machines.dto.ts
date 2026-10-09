@@ -96,10 +96,10 @@ export const machineResponseSchema = z
   })
   .meta({ id: 'Machine' });
 
-/** Machine details also carry the part conditions and the maintenance plan. */
+/** Machine details also carry the part conditions and every maintenance task (machine-wide and per part). */
 export const machineDetailResponseSchema = machineResponseSchema
   .extend({
     partDetails: z.array(machinePartResponseSchema),
-    maintenance: maintenanceScheduleResponseSchema.nullable(),
+    maintenanceSchedules: z.array(maintenanceScheduleResponseSchema),
   })
   .meta({ id: 'MachineDetail' });

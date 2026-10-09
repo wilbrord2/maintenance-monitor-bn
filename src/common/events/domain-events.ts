@@ -74,6 +74,10 @@ export interface MaintenanceReminderEvent {
   readonly machineId: number;
   readonly machineName: string;
   readonly serialNumber: string;
+  /** Null for a machine-wide task. */
+  readonly machinePartId: number | null;
+  readonly partName: string | null;
+  readonly taskName: string;
   readonly state: MaintenanceScheduleState;
   readonly nextMaintenanceAt: string;
   readonly daysUntilDue: number;
@@ -86,6 +90,10 @@ export interface MaintenanceCompletedEvent {
   readonly eventId: number;
   readonly machineId: number;
   readonly machineName: string;
+  readonly machinePartId: number | null;
+  readonly partName: string | null;
+  /** Null for one-off maintenance. */
+  readonly taskName: string | null;
   readonly completedAt: string;
   readonly nextMaintenanceAt: string | null;
   readonly performedBy: { readonly id: number; readonly name: string } | null;
