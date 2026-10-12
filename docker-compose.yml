@@ -60,9 +60,9 @@ services:
     env_file: .env
     environment:
       <<: *api-environment
-      PORT: 3000
+      PORT: 4000
     ports:
-      - '${API_PORT:-3000}:3000'
+      - '${API_PORT:-4000}:4000'
     depends_on:
       postgres:
         condition: service_healthy

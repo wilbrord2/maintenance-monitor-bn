@@ -16,7 +16,7 @@ const validEnv = (): NodeJS.ProcessEnv => ({
 describe('loadConfig', () => {
   it('builds a typed configuration with defaults', () => {
     const config = loadConfig(validEnv());
-    expect(config.port).toBe(3000);
+    expect(config.port).toBe(4000);
     expect(config.corsOrigins).toEqual(['http://localhost:5173', 'https://app.example.com']);
     expect(config.jwt.accessTtlSeconds).toBe(900);
     expect(config.jwt.refreshTtlSeconds).toBe(604800);
